@@ -6,3 +6,5 @@ else
     echo "Data already exists: data/obs_sbn_X05_full.parquet"
 fi 
 
+if [ ! -f ]
+wget -P https://minorplanetcenter.net/Extended_Files/mpcorb_extended.dat.gz 
