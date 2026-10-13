@@ -6,6 +6,18 @@ import numpy as np
 def print_list(lst, width=80):
     print(textwrap.fill(", ".join(lst), width=width))
 
+DEG = np.pi / 180.0
+RAD = 1.0 / DEG
+
+# Convert longitudes [0, 360) to Mollweide angles: 0° at center, East (0° -> 180°) left, West (360° -> 180°) right
+f2m = lambda lon: -((lon + 180.0) % 360.0 - 180.0)
+def split_mollweide(ra_deg, dec_deg):
+    """Convert RA and Dec to Mollweide radians and split lines across the 180° boundary."""
+    x = f2m(ra_deg) * DEG
+    y = np.deg2rad(dec_deg)
+    jumps = np.where(np.abs(np.diff(x)) > np.pi)[0]
+    return np.insert(x, jumps + 1, np.nan), np.insert(y, jumps + 1, np.nan)
+
 def ecl_gal(npoints=1000):
     # Ecliptic
     lon_ecl = np.linspace(0, 360, npoints) * u.deg
