@@ -7,3 +7,4 @@ test_dev
 **/output/*
 **/*.err
 **/*.log
+.venv/

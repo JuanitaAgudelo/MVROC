@@ -7,3 +7,4 @@ multimin
 alerce
 pyvo
 scikit-learn
+gdown
