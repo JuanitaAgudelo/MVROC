@@ -1,21 +1,22 @@
 #!/usr/bin/env python
 """Repeat the rotation figures of search_spectra_rotation_orbit.ipynb.
 
-One set of figures is written for every provid in data/asteroids-with-rotation.csv
-(the notebook's df_rot).
+Which asteroids and which figures to write is set in select_provid_all(),
+select_provid_list(), or select_provid_rotation(). The active one is the
+call at the start of main().
 
-Writes, for each designation, into figmass/:
-  lightcurve_allnights_H_<provid>.png
-  periodogram_<provid>.png
-  phase_allbands_<provid>.png
-  timemodel_H_<provid>.png
-  phase_model_all_periods_<provid>.png
-
-And two sample comparisons of the Lomb-Scargle period with the literature:
-  period_compare_lsm.png
-  period_compare_fourier.png
+Writes, into figall/, as WebP at half the previous resolution:
+  lightcurve_allnights_H_<provid>.webp
+  periodogram_<provid>.webp
+  phase_allbands_<provid>.webp
+  timemodel_H_<provid>.webp
+  phase_model_all_periods_<provid>.webp
+  period_compare_lsm.webp
+  period_compare_fourier.webp
 """
 
+import re
+import time
 from pathlib import Path
 
 import matplotlib
@@ -31,17 +32,93 @@ from util import ALL_BANDS, BANDS, band_colors
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
-FIG_DIR = ROOT / "figmass"
+FIG_DIR = ROOT / "figall"
 ROTATION_CATALOG = DATA_DIR / "asteroids-with-rotation.csv"
+OBS_FILE = DATA_DIR / "obs_sbn_X05_full.parquet"
 
 BAND = "Lr"
 PROP = "H"
 PERIODS_H = (2 / 60, 24)  # photometric periods searched, in hours
 N_FREQ = 20000
+MIN_N_OBS = 200
+DPI = 150  # half of the previous 300 dpi
+WEBP_QUALITY = 80
+ASTEROID_PROVID = re.compile(r"^\d{4} [A-Z]{2}\d+[A-Z]?$")
 
+# Per-asteroid figure names used in main().
+FIGURES = ("lightcurve", "periodogram", "phase", "timemodel", "literature", "compare")
 
 def slug(provid):
     return provid.replace(" ", "_")
+
+
+def save_figure(fig, path):
+    """Write a WebP at DPI. The path suffix is forced to .webp."""
+    path = Path(path).with_suffix(".webp")
+    fig.savefig(path, dpi=DPI, pil_kwargs={"quality": WEBP_QUALITY, "method": 6})
+    plt.close(fig)
+    return path
+
+
+def format_elapsed(seconds):
+    seconds = int(seconds)
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {secs:02d}s"
+    return f"{minutes}m {secs:02d}s"
+
+
+def check_figures(figures, where):
+    unknown = set(figures) - set(FIGURES)
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        allowed = ", ".join(FIGURES)
+        raise SystemExit(f"Unknown figure(s) in {where}: {names}. Use: {allowed}")
+
+
+def load_df_set():
+    """Photometry table, filtered as in the notebook (df_set)."""
+    columns = ["obstime", "permid", "provid", "ra", "dec", "band", "mag", "rmsmag"]
+    df_full = pd.read_parquet(OBS_FILE, columns=columns)
+    print(f"Original number of observations: {len(df_full)}")
+
+    df_set = df_full[~(df_full["provid"].isna() & df_full["permid"].isna())].reset_index(drop=True)
+    print(f"Number of observations with provid or permid: {len(df_set)}")
+
+    df_set = df_set[
+        df_set["provid"].apply(lambda pid: bool(ASTEROID_PROVID.match(str(pid))))
+    ].reset_index(drop=True)
+    n_provid = df_set["provid"].dropna().nunique()
+    print(f"Number of observations with asteroid provid: {len(df_set)}")
+    print(f"Number of objects with provid: {n_provid}")
+
+    df_set["band"] = df_set["band"].apply(
+        lambda b: f"L{b}" if pd.notnull(b) and len(str(b)) == 1 else b
+    )
+    df_set = df_set.sort_values(
+        by=["provid", "band", "obstime"],
+        ascending=[True, True, True],
+    ).reset_index(drop=True)
+    df_set[["ra", "dec", "mag", "rmsmag"]] = df_set[["ra", "dec", "mag", "rmsmag"]].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    df_set["obstime"] = pd.to_datetime(df_set["obstime"])
+    df_set["night"] = df_set["obstime"].dt.floor("D")
+    return df_set
+
+
+def observation_counts(df_set):
+    """df_obs from the notebook: number of observations per asteroid provid."""
+    provids = df_set["provid"].dropna().unique()
+    df_obs = (
+        df_set[df_set["provid"].isin(provids)]
+        .groupby("provid")
+        .size()
+        .reset_index(name="n_obs")
+        .sort_values(by="n_obs", ascending=False)
+    )
+    return df_obs.reset_index(drop=True)
 
 
 def load_rotation_catalog():
@@ -50,23 +127,6 @@ def load_rotation_catalog():
     df_rot["provid"] = df_rot["provid"].dropna().astype(str).str.strip()
     df_rot = df_rot[df_rot["provid"] != ""].drop_duplicates("provid")
     return df_rot.reset_index(drop=True)
-
-
-def load_observations(provids):
-    table = pq.read_table(
-        DATA_DIR / "obs_sbn_X05_full.parquet",
-        columns=["obstime", "permid", "provid", "ra", "dec", "band", "mag", "rmsmag"],
-        filters=[("provid", "in", provids)],
-    )
-    df = table.to_pandas()
-    df["band"] = df["band"].apply(
-        lambda b: f"L{b}" if pd.notnull(b) and len(str(b)) == 1 else b
-    )
-    for col in ["ra", "dec", "mag", "rmsmag"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["obstime"] = pd.to_datetime(df["obstime"])
-    df["night"] = df["obstime"].dt.floor("D")
-    return df
 
 
 def load_geometry(provid):
@@ -80,8 +140,8 @@ def load_geometry(provid):
     return df
 
 
-def prepare_object(df_obs, provid):
-    df_obj = df_obs[df_obs["provid"] == provid].copy()
+def prepare_object(df_set, provid):
+    df_obj = df_set[df_set["provid"] == provid].copy()
     if df_obj.empty:
         return df_obj
     df_obj = df_obj.sort_values(["band", "obstime"]).reset_index(drop=True)
@@ -122,6 +182,8 @@ def plot_lightcurve_h(df_obj, provid):
         t_night_0 = t_night["obstime"].min()
         hours = (t_night["obstime"] - t_night_0).dt.total_seconds() / 3600.0
         for b in ALL_BANDS:
+            if b == "Lu":
+                continue
             sel = t_night["band"] == b
             if not sel.any():
                 continue
@@ -137,13 +199,10 @@ def plot_lightcurve_h(df_obj, provid):
         ax.tick_params(axis="x", rotation=30)
 
     fig.tight_layout()
-    path = FIG_DIR / f"lightcurve_allnights_H_{slug(provid)}.png"
-    fig.savefig(path, dpi=300)
-    plt.close(fig)
-    return path
+    return save_figure(fig, FIG_DIR / f"lightcurve_allnights_H_{slug(provid)}.webp")
 
 
-def periodogram(df_obj, provid):
+def periodogram(df_obj, provid, save=True):
     df_band = df_obj[df_obj["band"] == BAND].dropna(subset=[PROP]).copy()
     if len(df_band) < 5:
         print(f"  skip periodogram for {provid}: {len(df_band)} {BAND} points with {PROP}")
@@ -180,22 +239,22 @@ def periodogram(df_obj, provid):
     df_peaks = pd.DataFrame(peak_data).sort_values("relative_power", ascending=False).reset_index(drop=True)
     all_rot_periods = df_peaks["rotational_period_h"].to_numpy()
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    period_grid_hours = (24.0 / freq_grid) * 2.0
-    ax.plot(period_grid_hours, power, color="b", lw=1.5)
-    ax.axvline(best_rot_period, color="r", linestyle="--", lw=2, label=f"Peak Period = {best_rot_period:.2f} h")
-    for period in all_rot_periods:
-        ax.axvline(period, color="g", linestyle=":", alpha=1, lw=1)
-    ax.set_xlabel("Rotational Period [hours]")
-    ax.set_ylabel("Spectral Power")
-    ax.set_title(f"Lomb-Scargle Periodogram for Asteroid {provid} ({BAND} Band, property={PROP})")
-    ax.set_xlim(0, 10)
-    ax.legend(loc="upper right", frameon=True)
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    path = FIG_DIR / f"periodogram_{slug(provid)}.png"
-    fig.savefig(path, dpi=300)
-    plt.close(fig)
+    path = None
+    if save:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        period_grid_hours = (24.0 / freq_grid) * 2.0
+        ax.plot(period_grid_hours, power, color="b", lw=1.5)
+        ax.axvline(best_rot_period, color="r", linestyle="--", lw=2, label=f"Peak Period = {best_rot_period:.2f} h")
+        for period in all_rot_periods:
+            ax.axvline(period, color="g", linestyle=":", alpha=1, lw=1)
+        ax.set_xlabel("Rotational Period [hours]")
+        ax.set_ylabel("Spectral Power")
+        ax.set_title(f"Lomb-Scargle Periodogram for Asteroid {provid} ({BAND} Band, property={PROP})")
+        ax.set_xlim(0, 10)
+        ax.legend(loc="upper right", frameon=True)
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        path = save_figure(fig, FIG_DIR / f"periodogram_{slug(provid)}.webp")
 
     freq_sel = df_peaks.iloc[0]["frequency"]
     per_sel = df_peaks.iloc[0]["rotational_period_h"]
@@ -211,9 +270,9 @@ def periodogram(df_obj, provid):
         "best_rot_period": best_rot_period,
         "freq_sel": freq_sel,
         "per_sel": per_sel,
+        "df_peaks": df_peaks,
         "path": path,
     }
-
 
 def plot_phase_allbands(df_obj, provid, fit):
     t0 = fit["t_band"].min()
@@ -248,10 +307,7 @@ def plot_phase_allbands(df_obj, provid, fit):
     axes[1].legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=True)
     fig.suptitle(f"Phase curve of {provid}, $P_{{rot}}$ = {per_sel:.2f} h")
     fig.tight_layout()
-    path = FIG_DIR / f"phase_allbands_{slug(provid)}.png"
-    fig.savefig(path, dpi=300)
-    plt.close(fig)
-    return path
+    return save_figure(fig, FIG_DIR / f"phase_allbands_{slug(provid)}.webp")
 
 
 def plot_timemodel_h(provid, fit):
@@ -290,10 +346,7 @@ def plot_timemodel_h(provid, fit):
     axs[-1].set_xlabel("Hours since the first observation of the night")
     fig.suptitle(f"{provid}: observed light curve and periodogram model")
     fig.tight_layout()
-    path = FIG_DIR / f"timemodel_H_{slug(provid)}.png"
-    fig.savefig(path, dpi=300)
-    plt.close(fig)
-    return path
+    return save_figure(fig, FIG_DIR / f"timemodel_H_{slug(provid)}.webp")
 
 
 def literature_periods(df_rot, provid):
@@ -347,17 +400,14 @@ def plot_phase_model_all_periods(provid, fit, lit_periods):
             rf"$P_{{rot}}$ = {per:.2f} h [{name}]"
         )
     fig.tight_layout()
-    path = FIG_DIR / f"phase_model_all_periods_{slug(provid)}.png"
-    fig.savefig(path, dpi=300)
-    plt.close(fig)
-    return path
+    return save_figure(fig, FIG_DIR / f"phase_model_all_periods_{slug(provid)}.webp")
 
 
 def plot_period_comparison(df_rot, measured):
     """Our Lomb-Scargle rotation period against the two literature periods."""
     specs = [
-        ("period_lsm_hr", "LSM", "period_compare_lsm.png"),
-        ("period_fourier_hr", "Fourier", "period_compare_fourier.png"),
+        ("period_lsm_hr", "LSM", "period_compare_lsm.webp"),
+        ("period_fourier_hr", "Fourier", "period_compare_fourier.webp"),
     ]
     literature = df_rot.set_index("provid")
     paths = []
@@ -396,16 +446,15 @@ def plot_period_comparison(df_rot, measured):
         ax.legend(loc="upper left", frameon=True)
         fig.tight_layout()
         path = FIG_DIR / filename
-        fig.savefig(path, dpi=300)
-        plt.close(fig)
+        path = save_figure(fig, path)
         paths.append(path)
         print(f"  {path.name} ({len(rows)} asteroids)")
     return paths
 
 
-def process(df_obs, provid, df_rot):
+def process(df_set, provid, df_rot, figures):
     print(f"{provid}")
-    df_obj = prepare_object(df_obs, provid)
+    df_obj = prepare_object(df_set, provid)
     if df_obj.empty:
         print("  no observations")
         return None
@@ -413,34 +462,157 @@ def process(df_obs, provid, df_rot):
         print(f"  no {PROP} values after merging the geometry table")
         return None
 
-    written = [plot_lightcurve_h(df_obj, provid)]
-    fit = periodogram(df_obj, provid)
+    written = []
+    if "lightcurve" in figures:
+        written.append(plot_lightcurve_h(df_obj, provid))
+
+    fit = periodogram(df_obj, provid, save="periodogram" in figures)
     if fit is not None:
-        written.append(fit["path"])
-        written.append(plot_phase_allbands(df_obj, provid, fit))
-        written.append(plot_timemodel_h(provid, fit))
-        written.append(plot_phase_model_all_periods(provid, fit, literature_periods(df_rot, provid)))
+        if fit["path"] is not None:
+            written.append(fit["path"])
+        if "phase" in figures:
+            written.append(plot_phase_allbands(df_obj, provid, fit))
+        if "timemodel" in figures:
+            written.append(plot_timemodel_h(provid, fit))
+        if "literature" in figures:
+            written.append(plot_phase_model_all_periods(provid, fit, literature_periods(df_rot, provid)))
     for path in written:
         print(f"  {path.name}")
-    return None if fit is None else fit["per_sel"]
+    return fit
 
+
+def write_peak_periods(rows):
+    """One row per period at or above 80% of the main Lomb-Scargle peak."""
+    df_peaks = pd.DataFrame(rows, columns=["provid", "rank", "period_h", "relative_power"])
+    path = FIG_DIR / "periods_above_80.csv"
+    df_peaks.to_csv(path, index=False)
+    print(f"{path.name} ({len(df_peaks)} periods, {df_peaks['provid'].nunique() if len(df_peaks) else 0} asteroids)")
+    return path
+
+
+def _selection_tables(provids, figures):
+    """Photometry and observation counts for an explicit provid list."""
+    check_figures(figures, "figures")
+
+    wanted = list(dict.fromkeys(str(provid).strip() for provid in provids if str(provid).strip()))
+    df_rot = load_rotation_catalog()
+    df_set = load_df_set()
+    present = set(df_set["provid"].dropna().astype(str))
+    missing = [provid for provid in wanted if provid not in present]
+    if missing:
+        print(f"No observations for: {', '.join(missing)}")
+    wanted = [provid for provid in wanted if provid in present]
+    if not wanted:
+        raise SystemExit("No selected asteroids have observations.")
+
+    df_set = df_set[df_set["provid"].isin(wanted)].copy()
+    counts = observation_counts(df_set).set_index("provid")["n_obs"]
+    selected = pd.DataFrame({
+        "provid": wanted,
+        "n_obs": [int(counts[provid]) for provid in wanted],
+    })
+    print(f"{len(selected)} asteroids selected")
+    return selected, df_set, df_rot, figures
+
+
+def select_provid_all():
+    """Asteroids with more than MIN_N_OBS observations, and the figures to write."""
+    # Figures for every asteroid. Remove a name to skip that plot.
+    figures = {
+        #"lightcurve",   # lightcurve_allnights_H: H vs time, all nights and each night
+        "periodogram",  # periodogram: Lomb-Scargle power vs rotational period
+        "phase",        # phase_allbands: phase curve in every band, raw and normalized
+        #"timemodel",    # timemodel_H: nightly light curve with the periodogram model
+        #"literature",   # phase_model_all_periods: folded curve at our period and the literature periods
+        #"compare",      # period_compare_lsm and period_compare_fourier: our period vs literature, once for the sample
+    }
+    check_figures(figures, "figures")
+
+    df_rot = load_rotation_catalog()
+    df_set = load_df_set()
+    df_obs = observation_counts(df_set)
+    selected = df_obs[df_obs["n_obs"] > MIN_N_OBS].reset_index(drop=True)
+    print(f"{len(selected)} asteroids with more than {MIN_N_OBS} observations")
+    if selected.empty:
+        raise SystemExit(f"No asteroids with more than {MIN_N_OBS} observations.")
+
+    df_set = df_set[df_set["provid"].isin(selected["provid"])].copy()
+    return selected, df_set, df_rot, figures
+
+def select_provid_list():
+    """An explicit provid list, and the figures to write."""
+    figures = {
+        "lightcurve",   # lightcurve_allnights_H: H vs time, all nights and each night
+        "periodogram",  # periodogram: Lomb-Scargle power vs rotational period
+        "phase",        # phase_allbands: phase curve in every band, raw and normalized
+        "timemodel",    # timemodel_H: nightly light curve with the periodogram model
+        #"literature",   # phase_model_all_periods: folded curve at our period and the literature periods
+        #"compare",      # period_compare_lsm and period_compare_fourier: our period vs literature, once for the sample
+    }
+    provids = [
+        "2025 MM82",
+        "2025 MA19",
+    ]
+    return _selection_tables(provids, figures)
+
+
+def select_provid_rotation():
+    """Provids in asteroids-with-rotation.csv, and the figures to write."""
+    figures = {
+        #"lightcurve",   # lightcurve_allnights_H: H vs time, all nights and each night
+        "periodogram",  # periodogram: Lomb-Scargle power vs rotational period
+        "phase",        # phase_allbands: phase curve in every band, raw and normalized
+        #"timemodel",    # timemodel_H: nightly light curve with the periodogram model
+        #"literature",   # phase_model_all_periods: folded curve at our period and the literature periods
+        #"compare",      # period_compare_lsm and period_compare_fourier: our period vs literature, once for the sample
+    }
+    df_rot = load_rotation_catalog()
+    return _selection_tables(df_rot["provid"].tolist(), figures)
 
 def main():
     FIG_DIR.mkdir(parents=True, exist_ok=True)
-    df_rot = load_rotation_catalog()
-    provids = df_rot["provid"].tolist()
-    if not provids:
-        raise SystemExit(f"No provids in {ROTATION_CATALOG}.")
-    print(f"Loading observations for {len(provids)} provids from {ROTATION_CATALOG.name}")
-    df_obs = load_observations(provids)
-    measured = {}
-    for provid in provids:
-        period = process(df_obs, provid, df_rot)
-        if period is not None:
-            measured[provid] = period
-    print("Period comparison with the literature")
-    plot_period_comparison(df_rot, measured)
+    t_start = time.perf_counter()
 
+    # select_provid_all: more than MIN_N_OBS observations
+    # select_provid_list: the list written inside that function
+    # select_provid_rotation: asteroids-with-rotation.csv
+    selected, df_set, df_rot, figures = select_provid_all()
+    # selected, df_set, df_rot, figures = select_provid_list()
+
+    measured = {}
+    peak_rows = []
+    compare = "compare" in figures
+    n_asteroids = len(selected)
+    total_obs = int(selected["n_obs"].sum())
+    t_loop = time.perf_counter()
+    done_obs = 0
+    for i, (provid, n_obs) in enumerate(zip(selected["provid"], selected["n_obs"]), start=1):
+        print(f"N = {int(n_obs)}")
+        fit = process(df_set, provid, df_rot, figures)
+        if fit is not None:
+            measured[provid] = fit["per_sel"]
+            for rank, row in fit["df_peaks"].iterrows():
+                peak_rows.append({
+                    "provid": provid,
+                    "rank": int(rank) + 1,
+                    "period_h": row["rotational_period_h"],
+                    "relative_power": row["relative_power"],
+                })
+        done_obs += int(n_obs)
+        elapsed = time.perf_counter() - t_start
+        # Scale the asteroid loop by observations; the catalog load is paid once.
+        estimated_total = (t_loop - t_start) + (time.perf_counter() - t_loop) * (total_obs / done_obs)
+        print(
+            f"  elapsed: {format_elapsed(elapsed)} ({i}/{n_asteroids}), "
+            f"estimated total: {format_elapsed(estimated_total)}"
+        )
+
+    write_peak_periods(peak_rows)
+
+    if compare:
+        print("Period comparison with the literature")
+        plot_period_comparison(df_rot, measured)
+        print(f"  elapsed: {format_elapsed(time.perf_counter() - t_start)}")
 
 if __name__ == "__main__":
     main()
