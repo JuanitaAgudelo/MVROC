@@ -2,8 +2,9 @@
 """Query JPL SBDB physical properties, including the rotation period.
 
 SBDB answers one object per HTTP request (astroquery SBDB.query(..., phys=True)).
-Those requests do not depend on each other, so a thread pool runs them together.
-The shared astroquery cache is left off, because it is not safe across threads.
+A burst of parallel requests makes the server answer 403 Forbidden, so this
+script sends one request at a time and waits between them. It stops if several
+requests in a row are refused. The shared astroquery cache is left off.
 
 The default target list is every asteroid provid in df_set, the same filter as
 search_spectra_rotation_orbit.ipynb. Writes data/sbdb_physical_properties.csv.
@@ -25,9 +26,11 @@ ROTATION_CATALOG = DATA_DIR / "asteroids-with-rotation.csv"
 OUT_FILE = DATA_DIR / "sbdb_physical_properties.csv"
 ASTEROID_PROVID = re.compile(r"^\d{4} [A-Z]{2}\d+[A-Z]?$")
 
-WORKERS = 4
-RETRIES = 4
-CHUNK = 200
+WORKERS = 1
+PAUSE_S = 1.5
+RETRIES = 3
+FORBIDDEN_PAUSE_S = 30
+STOP_AFTER_FORBIDDEN = 8
 COLUMNS = ["provid", "fullname", "parameter", "value", "sigma", "reference", "note"]
 
 
@@ -74,7 +77,11 @@ def query_phys(provid):
             break
         except Exception as exc:
             last_error = exc
-            time.sleep(attempt)
+            # 403 means JPL is refusing the client. Wait before trying again.
+            if "403" in str(exc):
+                time.sleep(FORBIDDEN_PAUSE_S)
+            else:
+                time.sleep(attempt)
     else:
         return [{
             "provid": provid,
@@ -141,33 +148,57 @@ def main():
     done = already_queried()
     pending = [provid for provid in targets if provid not in done]
     print(f"{len(targets)} targets, {len(targets) - len(pending)} already saved, {len(pending)} to query")
-    print(f"Using {WORKERS} parallel workers")
+    print(f"One request every {PAUSE_S:.1f} s ({WORKERS} worker)")
     if not pending:
         print(OUT_FILE)
         return
 
     t_start = time.perf_counter()
     n_ok = 0
+    forbidden_in_a_row = 0
+    stopped = False
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        for start in range(0, len(pending), CHUNK):
-            chunk = pending[start:start + CHUNK]
-            futures = {pool.submit(query_phys, provid): provid for provid in chunk}
-            for future in as_completed(futures):
-                provid = futures[future]
-                rows = future.result()
-                append_rows(rows)
-                n_ok += 1
-                names = [row["parameter"] for row in rows if row["parameter"]]
-                label = ", ".join(names) if names else rows[0]["note"]
-                elapsed = time.perf_counter() - t_start
-                estimated = elapsed * len(pending) / n_ok
-                print(
-                    f"{provid}: {label} | "
-                    f"elapsed: {format_elapsed(elapsed)} ({n_ok}/{len(pending)}), "
-                    f"estimated total: {format_elapsed(estimated)}"
-                )
+        futures = {}
+        pending_iter = iter(pending)
+        for _ in range(WORKERS):
+            provid = next(pending_iter, None)
+            if provid is None:
+                break
+            futures[pool.submit(query_phys, provid)] = provid
+        while futures:
+            done = next(as_completed(futures))
+            provid = futures.pop(done)
+            rows = done.result()
+            append_rows(rows)
+            n_ok += 1
+            note = rows[0]["note"] or ""
+            if "403" in str(note):
+                forbidden_in_a_row += 1
+            else:
+                forbidden_in_a_row = 0
+            names = [row["parameter"] for row in rows if row["parameter"]]
+            label = ", ".join(names) if names else note
+            elapsed = time.perf_counter() - t_start
+            estimated = elapsed * len(pending) / n_ok
+            print(
+                f"{provid}: {label} | "
+                f"elapsed: {format_elapsed(elapsed)} ({n_ok}/{len(pending)}), "
+                f"estimated total: {format_elapsed(estimated)}"
+            )
+            if forbidden_in_a_row >= STOP_AFTER_FORBIDDEN:
+                print("SBDB is refusing requests (403). Stopping so the block can expire.")
+                print("Saved objects are skipped on the next run.")
+                stopped = True
+                break
+            time.sleep(PAUSE_S)
+            provid = next(pending_iter, None)
+            if provid is not None:
+                futures[pool.submit(query_phys, provid)] = provid
 
-    print(f"Wrote {n_ok} asteroids to {OUT_FILE}")
+    if stopped:
+        print(f"Stopped after {n_ok} asteroids. File: {OUT_FILE}")
+    else:
+        print(f"Wrote {n_ok} asteroids to {OUT_FILE}")
 
 
 if __name__ == "__main__":

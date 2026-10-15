@@ -1,0 +1,12 @@
+[
+	{
+		"id": "asteroid",
+		"title": "Asteroid folded light-curves",
+		"path": "zuluaga_dev/figall/",
+		"start_with": null,
+		"configuration": {
+			"preview": true,
+			"grid": true
+		}
+	}
+]

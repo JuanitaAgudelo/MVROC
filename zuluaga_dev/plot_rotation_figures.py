@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 FIG_DIR = ROOT / "figall"
 ROTATION_CATALOG = DATA_DIR / "asteroids-with-rotation.csv"
+DESIGNATIONS = DATA_DIR / "mpc_designations.csv"
 OBS_FILE = DATA_DIR / "obs_sbn_X05_full.parquet"
 
 BAND = "Lr"
@@ -50,6 +51,17 @@ FIGURES = ("lightcurve", "periodogram", "phase", "timemodel", "literature", "com
 
 def slug(provid):
     return provid.replace(" ", "_")
+
+
+def output_path(kind, provid):
+    stem = {
+        "lightcurve": "lightcurve_allnights_H",
+        "periodogram": "periodogram",
+        "phase": "phase_allbands",
+        "timemodel": "timemodel_H",
+        "literature": "phase_model_all_periods",
+    }[kind]
+    return FIG_DIR / f"{stem}_{slug(provid)}.webp"
 
 
 def save_figure(fig, path):
@@ -129,30 +141,43 @@ def load_rotation_catalog():
     return df_rot.reset_index(drop=True)
 
 
-def load_geometry(provid):
+def load_mpc_designations():
+    """provid -> mpc_designation, from data/mpc_designations.csv."""
+    df = pd.read_csv(DESIGNATIONS)
+    df["provid"] = df["provid"].astype(str).str.strip()
+    return df.drop_duplicates("provid").set_index("provid")["mpc_designation"]
+
+
+def load_geometry(designation):
+    if designation is None or pd.isna(designation) or str(designation).strip() == "":
+        return pd.DataFrame(columns=["obstime", "mag", "H"])
     table = pq.read_table(
         DATA_DIR / "obs_final_elements_geometry_H.parquet",
         columns=["obstime", "mag", "H"],
-        filters=[("mpc_designation", "==", provid)],
+        filters=[("mpc_designation", "==", str(designation))],
     )
     df = table.to_pandas()
     df["obstime"] = pd.to_datetime(df["obstime"])
     return df
 
 
-def prepare_object(df_set, provid):
+def prepare_object(df_set, provid, designations):
     df_obj = df_set[df_set["provid"] == provid].copy()
     if df_obj.empty:
         return df_obj
     df_obj = df_obj.sort_values(["band", "obstime"]).reset_index(drop=True)
     t0 = df_obj["obstime"].iloc[0]
     df_obj["t_days"] = (df_obj["obstime"] - t0).dt.total_seconds() / 86400.0
-    df_spy = load_geometry(provid)
+    designation = designations.get(provid, provid)
+    df_spy = load_geometry(designation)
     df_obj = pd.merge(df_obj, df_spy, on="obstime", how="left", suffixes=("", "_spy"))
     return df_obj
 
 
 def plot_lightcurve_h(df_obj, provid):
+    path = output_path("lightcurve", provid)
+    if path.exists():
+        return path
     nights = df_obj.night.unique()
     n_nights = len(nights)
     fig, axs = plt.subplots(n_nights + 1, 1, figsize=(10, 3 * n_nights))
@@ -239,8 +264,8 @@ def periodogram(df_obj, provid, save=True):
     df_peaks = pd.DataFrame(peak_data).sort_values("relative_power", ascending=False).reset_index(drop=True)
     all_rot_periods = df_peaks["rotational_period_h"].to_numpy()
 
-    path = None
-    if save:
+    path = output_path("periodogram", provid)
+    if save and not path.exists():
         fig, ax = plt.subplots(figsize=(10, 6))
         period_grid_hours = (24.0 / freq_grid) * 2.0
         ax.plot(period_grid_hours, power, color="b", lw=1.5)
@@ -254,7 +279,9 @@ def periodogram(df_obj, provid, save=True):
         ax.legend(loc="upper right", frameon=True)
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
-        path = save_figure(fig, FIG_DIR / f"periodogram_{slug(provid)}.webp")
+        path = save_figure(fig, path)
+    elif not save or not path.exists():
+        path = None
 
     freq_sel = df_peaks.iloc[0]["frequency"]
     per_sel = df_peaks.iloc[0]["rotational_period_h"]
@@ -275,6 +302,9 @@ def periodogram(df_obj, provid, save=True):
     }
 
 def plot_phase_allbands(df_obj, provid, fit):
+    path = output_path("phase", provid)
+    if path.exists():
+        return path
     t0 = fit["t_band"].min()
     freq_sel = fit["freq_sel"]
     per_sel = fit["per_sel"]
@@ -311,6 +341,9 @@ def plot_phase_allbands(df_obj, provid, fit):
 
 
 def plot_timemodel_h(provid, fit):
+    path = output_path("timemodel", provid)
+    if path.exists():
+        return path
     df_band = fit["df_band"]
     nights_band = df_band["night"].drop_duplicates().sort_values()
     n_nights_band = len(nights_band)
@@ -367,6 +400,9 @@ def literature_periods(df_rot, provid):
 
 def plot_phase_model_all_periods(provid, fit, lit_periods):
     """Folded light curve at our period and at the literature periods."""
+    path = output_path("literature", provid)
+    if path.exists():
+        return path
     periods = {"VRO": fit["best_rot_period"], **lit_periods}
     t_band = fit["t_band"]
     y_band = fit["y_band"]
@@ -423,6 +459,11 @@ def plot_period_comparison(df_rot, measured):
         if not rows:
             print(f"  no pairs for the {label} comparison")
             continue
+        path = FIG_DIR / filename
+        if path.exists():
+            print(f"  {path.name} already exists")
+            paths.append(path)
+            continue
 
         provids, x, y = zip(*rows)
         x = np.asarray(x)
@@ -445,16 +486,19 @@ def plot_period_comparison(df_rot, measured):
         ax.grid(True, which="both", alpha=0.3)
         ax.legend(loc="upper left", frameon=True)
         fig.tight_layout()
-        path = FIG_DIR / filename
         path = save_figure(fig, path)
         paths.append(path)
         print(f"  {path.name} ({len(rows)} asteroids)")
     return paths
 
 
-def process(df_set, provid, df_rot, figures):
+def process(df_set, provid, df_rot, figures, designations):
     print(f"{provid}")
-    df_obj = prepare_object(df_set, provid)
+    kinds = [kind for kind in ("lightcurve", "periodogram", "phase", "timemodel", "literature") if kind in figures]
+    if kinds and all(output_path(kind, provid).exists() for kind in kinds):
+        print("  figures already exist")
+        return "skip"
+    df_obj = prepare_object(df_set, provid, designations)
     if df_obj.empty:
         print("  no observations")
         return None
@@ -481,12 +525,23 @@ def process(df_set, provid, df_rot, figures):
     return fit
 
 
-def write_peak_periods(rows):
-    """One row per period at or above 80% of the main Lomb-Scargle peak."""
-    df_peaks = pd.DataFrame(rows, columns=["provid", "rank", "period_h", "relative_power"])
+def write_peak_periods(rows, replaced):
+    """One row per period at or above 80% of the main Lomb-Scargle peak.
+
+    Provids whose figures were already on disk keep the rows already in the file.
+    """
+    columns = ["provid", "rank", "period_h", "relative_power"]
+    new = pd.DataFrame(rows, columns=columns)
     path = FIG_DIR / "periods_above_80.csv"
+    if path.exists():
+        old = pd.read_csv(path)
+        old = old[~old["provid"].isin(replaced)]
+        df_peaks = pd.concat([old, new], ignore_index=True)
+    else:
+        df_peaks = new
     df_peaks.to_csv(path, index=False)
-    print(f"{path.name} ({len(df_peaks)} periods, {df_peaks['provid'].nunique() if len(df_peaks) else 0} asteroids)")
+    n_provid = df_peaks["provid"].nunique() if len(df_peaks) else 0
+    print(f"{path.name} ({len(df_peaks)} periods, {n_provid} asteroids)")
     return path
 
 
@@ -578,9 +633,11 @@ def main():
     # select_provid_rotation: asteroids-with-rotation.csv
     selected, df_set, df_rot, figures = select_provid_all()
     # selected, df_set, df_rot, figures = select_provid_list()
+    designations = load_mpc_designations()
 
     measured = {}
     peak_rows = []
+    replaced = set()
     compare = "compare" in figures
     n_asteroids = len(selected)
     total_obs = int(selected["n_obs"].sum())
@@ -588,16 +645,20 @@ def main():
     done_obs = 0
     for i, (provid, n_obs) in enumerate(zip(selected["provid"], selected["n_obs"]), start=1):
         print(f"N = {int(n_obs)}")
-        fit = process(df_set, provid, df_rot, figures)
-        if fit is not None:
-            measured[provid] = fit["per_sel"]
-            for rank, row in fit["df_peaks"].iterrows():
-                peak_rows.append({
-                    "provid": provid,
-                    "rank": int(rank) + 1,
-                    "period_h": row["rotational_period_h"],
-                    "relative_power": row["relative_power"],
-                })
+        fit = process(df_set, provid, df_rot, figures, designations)
+        if fit == "skip":
+            pass
+        else:
+            replaced.add(provid)
+            if fit is not None:
+                measured[provid] = fit["per_sel"]
+                for rank, row in fit["df_peaks"].iterrows():
+                    peak_rows.append({
+                        "provid": provid,
+                        "rank": int(rank) + 1,
+                        "period_h": row["rotational_period_h"],
+                        "relative_power": row["relative_power"],
+                    })
         done_obs += int(n_obs)
         elapsed = time.perf_counter() - t_start
         # Scale the asteroid loop by observations; the catalog load is paid once.
@@ -607,7 +668,7 @@ def main():
             f"estimated total: {format_elapsed(estimated_total)}"
         )
 
-    write_peak_periods(peak_rows)
+    write_peak_periods(peak_rows, replaced)
 
     if compare:
         print("Period comparison with the literature")
