@@ -8,7 +8,7 @@ requests in a row are refused. The shared astroquery cache is left off.
 
 The default target list is every asteroid provid in df_set, the same filter as
 search_spectra_rotation_orbit.ipynb. Writes data/sbdb_physical_properties.csv.
-A later run skips provids already saved in that file.
+A later run skips every provid already present in that file, including failed queries.
 """
 
 import re
@@ -123,15 +123,11 @@ def query_phys(provid):
 
 
 def already_queried():
-    """Provids with a saved result. Failed queries are dropped so they run again."""
+    """Every provid already written to the output file. Nothing there is queried again."""
     if not OUT_FILE.exists():
         return set()
-    saved = pd.read_csv(OUT_FILE)
-    failed = saved["note"].fillna("").astype(str).str.startswith("query failed")
-    if failed.any():
-        saved = saved.loc[~failed].copy()
-        saved.to_csv(OUT_FILE, index=False)
-    return set(saved["provid"].dropna().astype(str))
+    saved = pd.read_csv(OUT_FILE, usecols=["provid"])
+    return set(saved["provid"].dropna().astype(str).str.strip())
 
 
 def append_rows(rows):
