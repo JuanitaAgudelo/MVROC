@@ -9,3 +9,4 @@ test_dev
 **/*.err
 **/*.log
 .venv/
+*.db
