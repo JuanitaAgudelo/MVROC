@@ -3,6 +3,7 @@ __pycache__/
 **/test_dev/**
 **/test_dev/
 test_dev
+**/contrib/**
 **/data/*
 **/output/*
 **/*.err

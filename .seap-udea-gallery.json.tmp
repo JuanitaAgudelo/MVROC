@@ -2,7 +2,7 @@
 	{
 		"id": "medellin",
 	    "title": "Medellin VRO Catalogue (MVROC)",
-		"path": "zuluaga_dev/figures/figures_medellin/",
+		"path": "code/figures/figures_medellin/",
 		"start_with": null,
 		"configuration": {
 			"preview": true,
@@ -12,7 +12,7 @@
 	{
 		"id": "asteroid",
 		"title": "Asteroid folded light-curves",
-		"path": "zuluaga_dev/figall/",
+		"path": "code/figall/",
 		"start_with": null,
 		"configuration": {
 			"preview": true,
