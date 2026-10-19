@@ -10,7 +10,7 @@ Every public Rubin measurement of a solar-system object. The colour is the numbe
 
 *Observations published by the Asteroid Institute and available publicly under [10.5281/zenodo.17047589](https://doi.org/10.5281/zenodo.17047589).*
 
-This release is `medellin-vroc-v19_10_2026.csv`. `medellin-vroc-latest.csv` is a copy of that file. The notebook `code/dev_build_catalogue.ipynb` writes both, using the date of the run for the versioned name, and also writes the same table to `code/medellin-vroc.csv`.
+This release is `releases/medellin-vroc-v19_10_2026.csv`. `medellin-vroc-latest.csv` is a symbolic link to that file. Git stores the table itself, not the link. The notebook `code/dev_build_catalogue.ipynb` writes the dated file in `releases/`, points the link at it, and also writes the same table to `code/medellin-vroc.csv`.
 
 ```python
 import pandas as pd
