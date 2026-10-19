@@ -2,20 +2,13 @@
 
 ## Vera Rubin Observatory Catalogue of the Photometric and Dynamical properties of asteroids
 
-![Medellin VRO Catalogue team](figures/Medellin-VROC-team.webp)
+The Medellin VRO Catalogue collects 524 asteroids measured in the public Rubin First Look data. Each row is one asteroid. It brings together the provisional designation, the time span and the number of measurements in each filter, the orbit at the first observation, mean absolute magnitudes, colors from the joint multiband light-curve fit, a rotation period chosen by a vote across filters, the parameters of that multiband fit on the synthetic channel Lk, two shape fits of the Lk light curve, a solar-normalized reflectance, and the physical properties reported by the JPL Small-Body Database, and the rotation periods of Greenstreet et al. (2026). A missing value is NaN.
 
-The catalogue was built by Team 5 at [Open Tools, Open Sky: Doing LSST Science with Public Rubin Data & LINCC Frameworks](https://plazasmalagon.com/lsst-science-public-rubin-data-products-hackathon-UdeA-2026/), a LATAM Hack Days workshop held in person at the Universidad de Antioquia, Medellín, Colombia, on 13–15 October 2026. The team was mentored by Pedro Bernardinelli.
+Every public Rubin measurement of a solar-system object. The colour is the number of measurements in each cell, on a logarithmic scale. The white points are the 524 asteroids in this catalogue, one point each, at the mean position of its measurements. Most of them sit in one field near right ascension 186° and declination +5°, so they overlap at the right edge of the map. The dashed curves are the ecliptic and the galactic equator.
 
-- Pedro Bernardinelli, mentor
-- Jorge Iván Zuluaga Callejas, Universidad de Antioquia, Colombia
-- Juanita Andrea Agudelo, Universidad de Antioquia, Colombia
-- Angie Melissa Gutiérrez Estupiñán, Universidad Industrial de Santander, Colombia
-- Nicolás Pan, Universidad de la República, Uruguay
-- Valeria Judith Burgoa Camacho, Universidad Mayor de San Andrés, Bolivia
+<img src="gallery/vro-observations-hexbin.png" alt="Density of Rubin solar-system observations" width="50%">
 
-The Medellin VRO Catalogue collects 524 asteroids measured in the public Rubin First Look data. Each row is one asteroid. It brings together the provisional designation, the time span and the number of measurements in each filter, the orbit at the first observation, mean absolute magnitudes, colors from the joint multiband light-curve fit, a rotation period chosen by a vote across filters, the parameters of that multiband fit on the synthetic channel Lk, two shape fits of the Lk light curve, a solar-normalized reflectance, and the physical properties reported by the JPL Small-Body Database. A missing value is NaN.
-
-Lk is the magnitude of the summed flux after each filter has been shifted onto one light curve by the fitted colors. Magnitudes in the rotation and shape columns are absolute magnitudes on Lk. The mean values `H_u` … `H_y` stay in the LSST bands.
+*Observations published by the Asteroid Institute and available publicly under [10.5281/zenodo.17047589](https://doi.org/10.5281/zenodo.17047589).*
 
 This release is `medellin-vroc-v19_10_2026.csv`. `medellin-vroc-latest.csv` is a copy of that file. The notebook `zuluaga_dev/dev_build_catalogue.ipynb` writes both, using the date of the run for the versioned name, and also writes the same table to `zuluaga_dev/medellin-vroc.csv`.
 
@@ -26,29 +19,102 @@ catalogue = pd.read_csv("medellin-vroc-latest.csv")
 catalogue.head()
 ```
 
+## Scientific team
+
+The catalogue was built by Team 5 at [Open Tools, Open Sky: Doing LSST Science with Public Rubin Data & LINCC Frameworks](https://plazasmalagon.com/lsst-science-public-rubin-data-products-hackathon-UdeA-2026/), a LATAM Hack Days workshop held in person at the Universidad de Antioquia, Medellín, Colombia, on 13–15 October 2026. 
+
+- Nicolás Pan, Universidad de la República, Uruguay
+- Juanita Andrea Agudelo, Universidad de Antioquia, Colombia
+- Jorge Iván Zuluaga Callejas, Universidad de Antioquia, Colombia
+- Valeria Judith Burgoa Camacho, Universidad Mayor de San Andrés, Bolivia
+- Angie Melissa Gutiérrez Estupiñán, Universidad Industrial de Santander, Colombia
+- Pedro Bernardinelli, mentor, Universidade de São Paulo, Brazil
+
+<img src="gallery/Medellin-VROC-team.webp" alt="Medellin VRO Catalogue team" width="50%">
+
+*From left to right: Jorge, Juanita, Vale, Nico, and Angie, with Pedro behind them. Behind the group are the city of Medellín, the Universidad de Antioquia station of the Medellín Metro, and the dome of the Planetario de Medellín observatory.*
+
+## Example: Comparing MVROC Rotation Periods with Published Values
+
+`p_rot_multi_h` is the period from the multiband fit, in hours. The black points use `rot_per_sbdb`, the period reported by the JPL Small-Body Database. The red points use `rot_per_lsm_gst`, the Lomb–Scargle period of Greenstreet et al. (2026). The legend gives the number of asteroids in each set. The dashed line is the double-period alias.
+
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+catalogue_file = "medellin-vroc-latest.csv"
+catalogue = pd.read_csv(catalogue_file)
+
+# Extract periods already published in the JPL's Small-Body Database
+sbdb = catalogue.dropna(subset=["p_rot_multi_h", "rot_per_sbdb"])
+# Extract periods published in Greenstreet et al. (2026)
+greenstreet = catalogue.dropna(subset=["p_rot_multi_h", "rot_per_lsm_gst"])
+
+# Combine all periods
+periods = np.concatenate([
+    sbdb["rot_per_sbdb"], sbdb["p_rot_multi_h"],
+    greenstreet["rot_per_lsm_gst"], greenstreet["p_rot_multi_h"],
+])
+
+# Plot periods
+fig, ax = plt.subplots(figsize=(6, 6))
+ax.scatter(sbdb["rot_per_sbdb"], sbdb["p_rot_multi_h"], s=5, c="k", zorder=3,
+           label=f"SBDB ({len(sbdb)})")
+ax.scatter(greenstreet["rot_per_lsm_gst"], greenstreet["p_rot_multi_h"], s=5, c="r", marker="s", zorder=3,
+           label=f"Greenstreet et al. (2026) ({len(greenstreet)})")
+
+# Decoration
+limits = np.array([periods.min() * 0.7, periods.max() * 1.4])
+ax.plot(limits, limits, "k-", label="Equal period")
+ax.plot(limits, 2 * limits, "k--", label="MVROC = 2 × published")
+ax.plot(limits, 0.5 * limits, "k:", label="MVROC = 0.5 × published")
+ax.set_xscale("log")
+ax.set_yscale("log")
+ax.set_xlim(limits)
+ax.set_ylim(limits)
+ax.set_aspect("equal")
+ax.set_xlabel("Published period [h]")
+ax.set_ylabel("MVROC period [h]")
+ax.legend(loc="upper left")
+ax.grid(alpha=0.3, which="both")
+```
+
+<img src="gallery/mvroc-sbdb-periods.png" alt="MVROC rotation periods compared with the SBDB and Greenstreet et al. (2026)" width="50%">
+
 ## Gallery
 
-These figures are copies in `gallery/` of the Medellín photometry run, so the README does not point at a particular pipeline directory. The asteroid is **2023 WK24**: 401 measurements in g, r, and i, and a rotation period on which all six vote series agree.
+The figures below showcase asteroid **2023 WK24**, observed in g, r, and i bands with a total of 401 measurements to date. Its rotation period was determined by unanimous agreement across six period-finding algorithms. We highlight the best shape model obtained under stringent quality criteria: at least 250 measurements, full consensus among votes, ellipsoid amplitude between 0.25 and 1 mag, axis ratio `q` from 0.3 to 0.95, `b/a` from 0.45 to 0.85, multiband residuals under 0.05 mag, and harmonic amplitude within a factor of two of the ellipsoid amplitude. Within these constraints, the lowest reduced chi-squared for the ellipsoid model is 1.30, while the touching-spheres model yields 1.46.
 
-It is the best shape fit in that run under a cut that keeps well-sampled, unanimous, and physically plausible solutions: at least 250 measurements, a unanimous vote, an ellipsoid amplitude between 0.25 and 1 mag, `q` from 0.3 to 0.95, `b/a` from 0.45 to 0.85, a multiband residual below 0.05 mag, and a harmonic amplitude within a factor of two of the ellipsoid amplitude. In that set the ellipsoid reduced chi-squared is 1.30, the lowest, and the touching-spheres value is 1.46.
+### Light curve, all nights
+
+<img src="gallery/2023_WK24_lightcurve_allnights_H.webp" alt="Light curve of 2023 WK24 on every night, in g, r, and i" width="50%">
+
+Absolute magnitudes in g, r, and i. The top panel collects every night. Each panel below is one night, measured from its first observation.
 
 ### Multiband phase curve
 
-![Phase curve of 2023 WK24 in g, r, and i](gallery/2023_WK24_phase_allbands.webp)
+<img src="gallery/2023_WK24_phase_allbands.webp" alt="Phase curve of 2023 WK24 in g, r, and i" width="50%">
 
 Absolute magnitudes in g, r, and i, folded at the voted period of 3.33 h and shifted by the brightest point of each band.
 
 ### Multiband light-curve fit
 
-![Joint light-curve fit of 2023 WK24 on channel Lk](gallery/2023_WK24_phase_model_Lk.webp)
+<img src="gallery/2023_WK24_phase_model_Lk.webp" alt="Joint light-curve fit of 2023 WK24 on channel Lk" width="50%">
 
 The same measurements, shifted onto Lk and fitted with four Fourier harmonics. The refined period is 3.328 h.
 
 ### Shape fit
 
-![Touching-spheres and ellipsoid fits to 2023 WK24](gallery/2023_WK24_phase_shape_fit_Lk.webp)
+<img src="gallery/2023_WK24_phase_shape_fit_Lk.webp" alt="Touching-spheres and ellipsoid fits to 2023 WK24" width="50%">
 
-Touching spheres (`q` = 0.61, reduced chi-squared 1.46) and an equator-on ellipsoid (`b/a` = 0.71, reduced chi-squared 1.30) fitted to the Lk light curve.
+Touching spheres (`q` = 0.61, reduced chi-squared 1.46) and an equator-on ellipsoid (`b/a` = 0.71, reduced chi-squared 1.30) fitted to the Lk light curve. Lk is a band of this catalogue, not an LSST filter. It is the magnitude of the summed flux after each filter has been shifted onto one light curve by the fitted colors.
+
+### Spectrum
+
+<img src="gallery/2023_WK24_spectrum.webp" alt="Solar-normalized reflectance of 2023 WK24" width="50%">
+
+Solar-normalized reflectance from the joint colors in g, r, and i, with `R(r) = 1`. The dashed curves are sketches of the C, S, and D taxonomic complexes.
 
 The full set of light curves and phase curves is in the [SEAP-UdeA gallery](https://seap-udea.github.io/gallery/?repo=medellin_workshop_solarsystem).
 
@@ -118,6 +184,8 @@ The period is chosen by a vote. The voters are the Lomb–Scargle maxima of the 
 | `periods_dem_h` | h | Period of each series, written as `Lr=3.33,Lg=3.33,Lr+Lg=3.33`. |
 
 ### Rotation: multiband fit on Lk
+
+Lk is the magnitude of the summed flux after each filter has been shifted onto one light curve by the fitted colors. Magnitudes in this section and in the shape fits are absolute magnitudes on Lk. The mean values `H_u` … `H_y` stay in the LSST bands.
 
 The light curve is taken to be double-peaked, so the rotational period is twice the photometric period. The fit uses between 2 and 10 Fourier harmonics and keeps the order with the lowest Bayesian information criterion. `p_rot_multi_used_h` is the period that starts the fit, here the voted period. `p_rot_multi_h` is the period after the fit.
 
@@ -197,6 +265,15 @@ From the JPL Small-Body Database. The number is stored without its unit. Each qu
 | `UB_sbdb` | mag | Color U−B. |
 | `spec_B_sbdb` | | Bus taxonomic class. |
 | `spec_T_sbdb` | | Tholen taxonomic class. |
+
+### Greenstreet et al. (2026)
+
+Rotation periods from Greenstreet et al. (2026), taken from `data/asteroids-with-rotation.csv`. A catalogue asteroid matches a row of that table when `provid` equals `provid` or `alt_designation`. Both values are NaN when the asteroid is not in the table.
+
+| Column | Unit | Meaning |
+|---|---|---|
+| `rot_per_lsm_gst` | h | Lomb–Scargle rotation period. |
+| `rot_per_fr_gst` | h | Fourier rotation period. |
 
 ### Dynamics
 
