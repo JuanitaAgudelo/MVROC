@@ -120,7 +120,7 @@ Touching spheres (`q` = 0.61, reduced chi-squared 1.46) and an equator-on ellips
 
 Solar-normalized reflectance from the joint colors in g, r, and i, with `R(r) = 1`. The dashed curves are sketches of the C, S, and D taxonomic complexes.
 
-The full set of light curves and phase curves is in the [SEAP-UdeA gallery](https://seap-udea.github.io/gallery/?repo=medellin_workshop_solarsystem).
+The full set of light curves and phase curves is in the [SEAP-UdeA gallery](https://seap-udea.github.io/gallery/?repo=MVROC).
 
 ## Suggested papers
 
