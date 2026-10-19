@@ -1,0 +1,42 @@
+cff-version: 1.2.0
+title: "Medellin VRO Catalogue"
+message: "If you use this catalogue, please cite it as below."
+type: dataset
+version: "1.0.0"
+date-released: 2026-10-19
+license: MIT
+repository-code: "https://github.com/seap-udea/MVROC"
+abstract: >-
+  Photometric and dynamical properties of 524 asteroids measured in the
+  public Rubin First Look data. Each row is one asteroid and includes the
+  provisional designation, the time span and number of measurements in each
+  filter, the orbit at the first observation, mean absolute magnitudes,
+  colors from a joint multiband light-curve fit, a rotation period chosen by
+  a vote across filters, the parameters of that fit, two shape fits, a
+  solar-normalized reflectance, and physical properties from the JPL
+  Small-Body Database.
+authors:
+  - given-names: Jorge Iván
+    family-names: Zuluaga Callejas
+    affiliation: Universidad de Antioquia
+  - given-names: Nicolás
+    family-names: Pan
+    affiliation: Universidad de la República
+  - given-names: Juanita Andrea
+    family-names: Agudelo
+    affiliation: Universidad de Antioquia
+  - given-names: Valeria Judith
+    family-names: Burgoa Camacho
+    affiliation: Universidad Mayor de San Andrés
+  - given-names: Angie Melissa
+    family-names: Gutiérrez Estupiñán
+    affiliation: Universidad Industrial de Santander
+  - given-names: Pedro
+    family-names: Bernardinelli
+    affiliation: Universidade de São Paulo
+keywords:
+  - asteroids
+  - Rubin Observatory
+  - LSST
+  - light curves
+  - rotation periods

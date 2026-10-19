@@ -23,9 +23,9 @@ catalogue.head()
 
 The catalogue was built by Team 5 at [Open Tools, Open Sky: Doing LSST Science with Public Rubin Data & LINCC Frameworks](https://plazasmalagon.com/lsst-science-public-rubin-data-products-hackathon-UdeA-2026/), a LATAM Hack Days workshop held in person at the Universidad de Antioquia, Medellín, Colombia, on 13–15 October 2026. 
 
+- Jorge Iván Zuluaga Callejas, Universidad de Antioquia, Colombia
 - Nicolás Pan, Universidad de la República, Uruguay
 - Juanita Andrea Agudelo, Universidad de Antioquia, Colombia
-- Jorge Iván Zuluaga Callejas, Universidad de Antioquia, Colombia
 - Valeria Judith Burgoa Camacho, Universidad Mayor de San Andrés, Bolivia
 - Angie Melissa Gutiérrez Estupiñán, Universidad Industrial de Santander, Colombia
 - Pedro Bernardinelli, mentor, Universidade de São Paulo, Brazil
