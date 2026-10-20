@@ -1,5 +1,7 @@
 # Medellin VRO Catalogue
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23486386.svg)](https://doi.org/10.5281/zenodo.23486386)
+
 ## Vera Rubin Observatory Catalogue of the Photometric and Dynamical properties of asteroids
 
 The Medellin VRO Catalogue collects 524 asteroids measured in the public Rubin First Look data. Each row is one asteroid. It brings together the provisional designation, the time span and the number of measurements in each filter, the orbit at the first observation, mean absolute magnitudes, colors from the joint multiband light-curve fit, a rotation period chosen by a vote across filters, the parameters of that multiband fit on the synthetic channel Lk, two shape fits of the Lk light curve, a solar-normalized reflectance, and the physical properties reported by the JPL Small-Body Database, and the rotation periods of Greenstreet et al. (2026). A missing value is NaN.
