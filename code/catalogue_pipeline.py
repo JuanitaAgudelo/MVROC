@@ -1746,7 +1746,7 @@ def _figure_paths(kind, provid):
         return [
             # output_path("multiband_lightcurve", provid),
             output_path("multiband_phase_model", provid),
-            FIG_DIR / f"{slug(provid)}_band_k.csv",
+            FIG_DIR / f"{slug(provid)}_observations.csv",
         ]
     if kind == "shape_fit_multiband":
         return [output_path("shape_multiband", provid)]
@@ -2000,6 +2000,7 @@ def multiband_photometry(df_obj, provid, fit=None, save=True):
         present_k = [f for f in filt_order if f in set(g["filt"])]
         out_k["band"] = "Lk"
         out_k["filt"] = "k"
+        out_k["mag"] = np.nan
         out_k[PROP] = mag_k
         out_k["rmsmag"] = np.sqrt(var)
         out_k["estimated"] = True
@@ -2184,26 +2185,40 @@ def multiband_photometry(df_obj, provid, fit=None, save=True):
 
     written_paths = []
     if save:
-        path_k_csv = FIG_DIR / f"{slug(provid)}_band_k.csv"
+        path_obs_csv = FIG_DIR / f"{slug(provid)}_observations.csv"
+        observed = real.copy()
+        observed["provid"] = provid
+        observed["obs_filt"] = observed["filt"]
+        observed["source_filt"] = observed["filt"]
         df_lk["provid"] = provid
+        df_export = pd.concat([observed, df_lk], ignore_index=True)
+        df_export["mag"] = pd.to_numeric(df_export["mag"], errors="coerce")
+        df_export[PROP] = pd.to_numeric(df_export[PROP], errors="coerce")
+        is_lk = df_export["band"].eq("Lk")
+        df_export.loc[is_lk, "mag"] = np.nan
+        valid_h = df_export[PROP].notna() & (df_export[PROP] != 0)
+        valid_mag = df_export["mag"].notna() & (df_export["mag"] != 0)
+        df_export = df_export.loc[(is_lk & valid_h) | (~is_lk & valid_mag & valid_h)]
+        df_export = df_export.sort_values(
+            ["obstime", "band"], kind="mergesort"
+        ).reset_index(drop=True)
         cols_export = [
-            c
-            for c in [
-                "provid",
-                "obstime",
-                "t_days",
-                "night",
-                "band",
-                "filt",
-                "obs_filt",
-                "source_filt",
-                PROP,
-                "rmsmag",
-            ]
-            if c in df_lk.columns
+            "provid",
+            "obstime",
+            "t_days",
+            "night",
+            "band",
+            "obs_filt",
+            "source_filt",
+            "mag",
+            PROP,
+            "rmsmag",
         ]
-        df_lk[cols_export].to_csv(path_k_csv, index=False)
-        written_paths.append(path_k_csv)
+        df_export[cols_export].to_csv(path_obs_csv, index=False, na_rep="NaN")
+        stale_k_csv = FIG_DIR / f"{slug(provid)}_band_k.csv"
+        if stale_k_csv.exists():
+            stale_k_csv.unlink()
+        written_paths.append(path_obs_csv)
 
         # 1. lightcurve_allnights
         # path_lc = output_path("multiband_lightcurve", provid)
