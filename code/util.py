@@ -57,10 +57,11 @@ def ecl_gal(npoints=1000):
 
     return [[ecl_ra, ecl_dec], [gal_ra, gal_dec]]
 
-def get_data(data_dir='data/'):
+def get_data(data_dir='data/', only=None):
     """
     Downloads the data files specified in get_data.sh.
     Creates the 'data/' directory if it does not exist and downloads the required files using wget or gdown.
+    If `only` is a list of file names (e.g. ['mpcorb_extended.dat.gz']), only those files are downloaded.
     """
     import os
     import subprocess
@@ -95,6 +96,9 @@ def get_data(data_dir='data/'):
             "cmd": f'gdown -O {data_dir}mpc_designations.csv 1ye9aftlBReq9HvJX0RzGWz2gB-G4pQkO'
         }
     ]
+
+    if only is not None:
+        files = [file for file in files if os.path.basename(file["filename"]) in only]
 
     os.makedirs(data_dir, exist_ok=True)
     for file in files:
