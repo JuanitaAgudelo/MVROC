@@ -47,8 +47,8 @@ def choose_selection(cli_provids):
         # cp.select_provid_rotation()
         # cp.select_provid_rotfold()
         # cp.select_provid_list()
-        # cp.select_provid_medellin()
-        cp.select_provid_nobs()
+        cp.select_provid_medellin()
+        # cp.select_provid_nobs()
     )
 
 
