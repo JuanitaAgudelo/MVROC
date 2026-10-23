@@ -47,8 +47,9 @@ def choose_selection(cli_provids):
         # cp.select_provid_rotation()
         # cp.select_provid_rotfold()
         # cp.select_provid_list()
-        cp.select_provid_medellin()
+        # cp.select_provid_medellin()
         # cp.select_provid_nobs()
+        cp.select_provid_revisit()
     )
 
 
@@ -176,19 +177,33 @@ def _result_row(df_ast, provid, band, fit, analysis):
         row["p_rot_cmp_h"] = compared["p_rot_h"]
         row["chi2_nu_cmp"] = compared["chi2_nu"]
         row["periods_cmp"] = compared["periods"]
-    if "multiband_photometry_compare" in analysis and fit.get(
+    mb_row = None
+    if "multiband_photometry_nightalias" in analysis and fit.get(
+        "multiband_photometry_nightalias"
+    ):
+        mb_row = fit["multiband_photometry_nightalias"]
+    elif "multiband_photometry_compare" in analysis and fit.get(
         "multiband_photometry_compare"
     ):
-        mb_compared = fit["multiband_photometry_compare"]
-        row["p_rot_h"] = mb_compared["p_rot_h"]
-        row["chi2_nu"] = mb_compared["chi2_nu"]
-        row["n_peaks"] = mb_compared["n_peaks"]
-        row["power"] = mb_compared["power"]
-        row["amp_ratio"] = mb_compared["amp_ratio"]
-        row["amp_data"] = mb_compared["amp_data"]
-        row["span_alias"] = mb_compared["span_alias"]
+        mb_row = fit["multiband_photometry_compare"]
+    if mb_row is not None:
+        row["p_rot_h"] = mb_row["p_rot_h"]
+        row["chi2_nu"] = mb_row["chi2_nu"]
+        row["n_peaks"] = mb_row["n_peaks"]
+        row["power"] = mb_row["power"]
+        row["amp_ratio"] = mb_row["amp_ratio"]
+        row["amp_data"] = mb_row["amp_data"]
+        row["span_alias"] = mb_row["span_alias"]
         # Every pair among the filters with a zero point, bluer minus redder.
-        row.update(mb_compared.get("colors", {}))
+        row.update(mb_row.get("colors", {}))
+        if "multiband_photometry_nightalias" in analysis:
+            row["nightalias_tested"] = mb_row.get("nightalias_tested", 0)
+            row["nightalias_stable"] = mb_row.get("nightalias_stable", 0)
+            row["nightalias_band"] = mb_row.get("nightalias_band", "")
+            row["nightalias_n_nights"] = mb_row.get("nightalias_n_nights", 0)
+            row["nightalias_n_tested"] = mb_row.get("nightalias_n_tested", 0)
+            row["nightalias_n_kept"] = mb_row.get("nightalias_n_kept", 0)
+            row["nightalias_periods"] = mb_row.get("nightalias_periods", "")
     if "justfold" in analysis and fit.get("justfold"):
         folded = fit["justfold"]
         row["p_rot_justfold_h"] = folded["p_rot_h"]
@@ -203,7 +218,10 @@ def _result_row(df_ast, provid, band, fit, analysis):
     if "multiband_photometry" in analysis:
         if "multiband" in fit and fit["multiband"] is not None:
             summary = dict(fit["multiband"].get("summary_row", {}))
-            if "multiband_photometry_compare" in analysis:
+            if (
+                "multiband_photometry_compare" in analysis
+                or "multiband_photometry_nightalias" in analysis
+            ):
                 for key in cp.COMPARE_COLOR_COLUMNS:
                     summary.pop(key, None)
             row.update(summary)

@@ -108,7 +108,7 @@ Written when `multiband_photometry_compare` is selected. It needs `periodogram_d
 | `power` | `float` | Lomb–Scargle power of the adopted period. | Normalized multiband Lomb–Scargle power of the fitted points at the photometric frequency \(f = 48/P_{\mathrm{rot}}\). This is the value stored in `power` when this analysis is selected. |
 | `amp_ratio` | `float` | Amplitude of the adopted model over the scatter about the curve. | \(A/s\). \(A\) is the peak-to-peak of the order-2 model, the value shown in the panel title. \(s\) is the mean of \(\sqrt{d^2+\sigma^2}\) after dropping the farthest 10% of the distances \(d\) from the points to the curve. |
 | `amp_data` | `float` | Amplitude of the plotted magnitudes (mag). | Difference between the 97.5th and the 2.5th percentile of the points shifted onto the reference filter. The same two levels are the dotted lines on the selected panel. |
-| `span_alias` | `int` | Whether the adopted period is an alias of the campaign duration. | 0 for every stored period. A voted period that lands on a campaign alias is marked and is not adopted, so a row that has a period has this flag equal to 0. |
+| `span_alias` | `int` | Whether the adopted period is an alias of the campaign duration. | 0 under `multiband_photometry_compare`, which never adopts an alias. Under `multiband_photometry_nightalias` it can be 1 when leave-one-night-out keeps a campaign-labelled period. |
 | `u-g`, `u-g_err` | `float` | \(u-g\) and its uncertainty (mag). | \(c_u - c_g\). \(c_u\) is the post-fit mean of \(u\) minus the reference curve. The uncertainties are added in quadrature. |
 | `u-r`, `u-r_err` | `float` | \(u-r\) and its uncertainty (mag). | \(c_u - c_r\). When \(r\) is the reference, \(c_r = 0\) and this is \(c_u\). |
 | `u-i`, `u-i_err` | `float` | \(u-i\) and its uncertainty (mag). | \(c_u - c_i\), uncertainties in quadrature. |
@@ -124,6 +124,24 @@ Written when `multiband_photometry_compare` is selected. It needs `periodogram_d
 | `i-z`, `i-z_err` | `float` | \(i-z\) and its uncertainty (mag). | \(c_i - c_z\). |
 | `i-y`, `i-y_err` | `float` | \(i-y\) and its uncertainty (mag). | \(c_i - c_y\). |
 | `z-y`, `z-y_err` | `float` | \(z-y\) and its uncertainty (mag). | \(c_z - c_y\). |
+
+---
+
+## 3d2. Multiband comparison with leave-one-night-out (`nightalias`)
+
+Written when `multiband_photometry_nightalias` is selected. It needs `periodogram_democratic`. It runs the same two-peak joint model as section 3d and writes the same period, power, amplitude, and color columns. When the lowest-\(\chi^2_\nu\) two-peak model is not a campaign alias, the adopted period is that model and `nightalias_tested` is 0.
+
+When that lowest-\(\chi^2_\nu\) model is a campaign alias, the analysis does not reject it at once. It takes the single band with the most points among the series that voted for that period and repeats the Lomb–Scargle periodogram leaving each calendar night out in turn. A fold needs at least five points. At least three nights and two successful folds are required. The peak is stable when at least half of the successful folds keep a maximum within 0.1 cycles/day of the candidate frequency. If it is stable, that campaign-labelled period is adopted, `span_alias` is 1, and `nightalias_stable` is 1. If it is not stable, the analysis falls back to the best two-peak model without an alias label, or leaves the asteroid out under “Campaign alias failed leave-one-night-out”. The figure stem is `multiband_photometry_nightalias`. When both this analysis and `multiband_photometry_compare` are selected, this one supplies the period used by later fits.
+
+| Column | Type | Description | Calculation Method |
+| :--- | :--- | :--- | :--- |
+| `nightalias_tested` | `int` | Whether leave-one-night-out ran. | 1 when the lowest-\(\chi^2_\nu\) two-peak model was a campaign alias. |
+| `nightalias_stable` | `int` | Whether leave-one-night-out kept the peak often enough. | 1 when `n_kept >= 0.5 * n_tested` and at least two folds ran. |
+| `nightalias_band` | `str` | Band used for the leave-one-night-out periodogram. | The single band with the most points among the labels that voted for the candidate. |
+| `nightalias_n_nights` | `int` | Number of calendar nights in that band. | Distinct `obstime` dates floored to days. |
+| `nightalias_n_tested` | `int` | Number of leave-one-night-out folds with at least five points. | One fold per night left out. |
+| `nightalias_n_kept` | `int` | Folds whose peak stayed within 0.1 cycles/day of the candidate. | Count of stable folds. |
+| `nightalias_periods` | `str` | Rotation period and peak power of each fold. | Written as `P_rot:power`, e.g. `5.0107:0.770,5.5810:0.740,...`, in the order of the nights left out. |
 
 ---
 

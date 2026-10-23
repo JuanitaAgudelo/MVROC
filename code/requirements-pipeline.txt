@@ -1,0 +1,9 @@
+# Minimal dependencies for catalogue_pipeline.py and catalogue_pipeline_parallel.py
+numpy
+pandas
+matplotlib
+pyarrow
+astropy
+astroquery
+scipy
+pillow

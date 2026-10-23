@@ -3,12 +3,13 @@
 
 Which asteroids and which figures to write is set in select_provid_all(),
 select_provid_list(), select_provid_rotation(), select_provid_rotfold(),
-select_provid_medellin(), or select_provid_nobs().
+select_provid_medellin(), select_provid_nobs(), or select_provid_revisit().
 The active one is the call at the start of main().
 
 Writes, into figall/, as WebP at half the previous resolution:
   <provid>_lightcurve_allnights_H.webp
   <provid>_periodogram.webp
+  <provid>_periodogram_democratic.webp
   <provid>_phase_periodogram.webp
   <provid>_phase_democratic.webp
   <provid>_phase_democratic_weighted.webp
@@ -17,6 +18,7 @@ Writes, into figall/, as WebP at half the previous resolution:
   <provid>_phase_model.webp
   <provid>_phase_model_compare.webp
   <provid>_multiband_photometry_compare.webp
+  <provid>_multiband_photometry_nightalias.webp
   <provid>_justfold.webp
   <provid>_phase_spheres_fit.webp
   <provid>_phase_ellipsoid_fit.webp
@@ -35,6 +37,7 @@ import re
 import shutil
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import matplotlib
@@ -57,6 +60,7 @@ _LOG_FILE = None
 _PREV_STDOUT = None
 ROTATION_CATALOG = DATA_DIR / "asteroids-with-rotation.csv"
 MEDELLIN_CATALOG = DATA_DIR / "medellin-vro-list.csv"
+REVISIT_CATALOG = DATA_DIR / "revisit.csv"
 DESIGNATIONS = DATA_DIR / "mpc_designations.csv"
 OBS_FILE = DATA_DIR / "obs_sbn_X05_full_mpc_desig.parquet"
 
@@ -81,6 +85,7 @@ ANALYSIS = (
     "phase_model",
     "phase_model_compare",
     "multiband_photometry_compare",
+    "multiband_photometry_nightalias",
     "justfold",
     "shape_fit",
     "timemodel",
@@ -131,12 +136,19 @@ class _Tee:
 
 
 def _start_log(path):
-    """Copy stdout into path. A later call replaces the previous log."""
+    """Copy stdout into path. If the file already exists, append a new run."""
     global _LOG_FILE, _PREV_STDOUT
     _stop_log()
-    _LOG_FILE = open(path, "w", encoding="utf-8")
+    path = Path(path)
+    append = path.is_file() and path.stat().st_size > 0
+    _LOG_FILE = open(path, "a" if append else "w", encoding="utf-8")
     _PREV_STDOUT = sys.stdout
     sys.stdout = _Tee(_PREV_STDOUT, _LOG_FILE)
+    if append:
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        print(f"\n{'=' * 72}")
+        print(f"New run started: {stamp}")
+        print(f"{'=' * 72}")
 
 
 def _stop_log():
@@ -158,6 +170,7 @@ def output_path(kind, provid):
     stem = {
         "lightcurve": "lightcurve_allnights_H",
         "periodogram": "periodogram",
+        "periodogram_democratic": "periodogram_democratic",
         "phase": "phase_allbands",
         "phase_periodogram": "phase_periodogram",
         "phase_democratic": "phase_democratic",
@@ -167,6 +180,7 @@ def output_path(kind, provid):
         "phase_model": "phase_model",
         "phase_model_compare": "phase_model_compare",
         "multiband_photometry_compare": "multiband_photometry_compare",
+        "multiband_photometry_nightalias": "multiband_photometry_nightalias",
         "justfold": "justfold",
         "spheres": "phase_spheres_fit",
         "ellipsoid": "phase_ellipsoid_fit",
@@ -181,9 +195,47 @@ def output_path(kind, provid):
     return FIG_DIR / f"{slug(provid)}_{stem}.webp"
 
 
+def mvroc_mark(ax, fontsize=12, alpha=0.55):
+    """Add an MVROC watermark at about the size of the figure title."""
+    args = dict(
+        rotation=270,
+        ha="left",
+        va="top",
+        transform=ax.transAxes,
+        color="pink",
+        alpha=alpha,
+        fontsize=fontsize,
+        zorder=100,
+    )
+    try:
+        ax.add_collection3d
+        plt_text = ax.text2D
+    except Exception:
+        plt_text = ax.text
+    return plt_text(1, 1, "MVROC", **args)
+
+
+def add_mvroc_watermarks(fig):
+    """Stamp MVROC on every main axes (skip insets and colorbars)."""
+    inset_ids = {
+        id(child)
+        for ax in fig.axes
+        for child in getattr(ax, "child_axes", ())
+    }
+    for ax in fig.axes:
+        if id(ax) in inset_ids:
+            continue
+        if ax.get_label() == "<colorbar>":
+            continue
+        mvroc_mark(ax)
+
+
 def save_figure(fig, path):
     """Write a WebP at DPI. The path suffix is forced to .webp."""
     path = Path(path).with_suffix(".webp")
+    # Draw once so axis window extents are known before sizing the mark.
+    fig.canvas.draw()
+    add_mvroc_watermarks(fig)
     fig.savefig(path, dpi=DPI, pil_kwargs={"quality": WEBP_QUALITY, "method": 6})
     plt.close(fig)
     return path
@@ -204,27 +256,30 @@ def check_analysis(analysis, where):
         names = ", ".join(sorted(unknown))
         allowed = ", ".join(ANALYSIS)
         raise SystemExit(f"Unknown analysis in {where}: {names}. Use: {allowed}")
+    has_compare_period = (
+        "multiband_photometry_compare" in analysis
+        or "multiband_photometry_nightalias" in analysis
+    )
     if "shape_fit_multiband" in analysis and not (
-        "multiband_photometry" in analysis or "multiband_photometry_compare" in analysis
+        "multiband_photometry" in analysis or has_compare_period
     ):
         raise SystemExit(
-            f"Error in {where}: 'shape_fit_multiband' needs 'multiband_photometry_compare' "
+            f"Error in {where}: 'shape_fit_multiband' needs "
+            "'multiband_photometry_compare', 'multiband_photometry_nightalias', "
             "or 'multiband_photometry'."
         )
     if "spectrum" in analysis and not (
-        "multiband_photometry" in analysis or "multiband_photometry_compare" in analysis
+        "multiband_photometry" in analysis or has_compare_period
     ):
         raise SystemExit(
-            f"Error in {where}: 'spectrum' needs 'multiband_photometry_compare' "
+            f"Error in {where}: 'spectrum' needs "
+            "'multiband_photometry_compare', 'multiband_photometry_nightalias', "
             "or 'multiband_photometry'."
         )
-    if "timemodel_Lk" in analysis and "multiband_photometry_compare" not in analysis:
+    if "timemodel_Lk" in analysis and not has_compare_period:
         raise SystemExit(
-            f"Error in {where}: 'timemodel_Lk' needs 'multiband_photometry_compare'."
-        )
-    if "timemodel_Lk" in analysis and "multiband_photometry_compare" not in analysis:
-        raise SystemExit(
-            f"Error in {where}: 'timemodel_Lk' needs 'multiband_photometry_compare'."
+            f"Error in {where}: 'timemodel_Lk' needs 'multiband_photometry_compare' "
+            "or 'multiband_photometry_nightalias'."
         )
     if "phase_model_compare" in analysis and not (
         "periodogram_democratic" in analysis
@@ -234,12 +289,10 @@ def check_analysis(analysis, where):
             f"Error in {where}: 'phase_model_compare' needs 'periodogram_democratic' "
             "or 'periodogram_democratic_weighted'."
         )
-    if (
-        "multiband_photometry_compare" in analysis
-        and "periodogram_democratic" not in analysis
-    ):
+    if has_compare_period and "periodogram_democratic" not in analysis:
         raise SystemExit(
-            f"Error in {where}: 'multiband_photometry_compare' needs 'periodogram_democratic'."
+            f"Error in {where}: 'multiband_photometry_compare' and "
+            "'multiband_photometry_nightalias' need 'periodogram_democratic'."
         )
 
 
@@ -587,31 +640,7 @@ def periodogram(df_obj, provid, save=True, band=None, kind="periodogram"):
         t_campaign = pd.to_numeric(df_obj["t_days"], errors="coerce").to_numpy(float)
         t_campaign = t_campaign[np.isfinite(t_campaign)]
         span = float(np.ptp(t_campaign)) if len(t_campaign) else 0.0
-        if span > 0:
-            k_values = list(_campaign_alias_k_range(span))
-            k_first = k_values[0] if k_values else None
-            for k in k_values:
-                for base, name, color in (
-                    (1.0 / span, "span", "C1"),
-                    (2.0 / span, "2-span", "C4"),
-                ):
-                    freq = base + float(k)
-                    if freq <= 0:
-                        continue
-                    ax.axvline(
-                        48.0 / freq,
-                        color=color,
-                        linestyle="-",
-                        lw=2,
-                        alpha=0.4,
-                        zorder=1,
-                        label=(
-                            f"{name}, {2.0 * PERIODS_H[1]:.0f} h to "
-                            f"{ALIAS_P_MIN_H:.0f} h"
-                            if k == k_first
-                            else None
-                        ),
-                    )
+        _draw_campaign_alias_vlines(ax, span)
         ax.axvline(
             best_rot_period,
             color="r",
@@ -732,6 +761,43 @@ def _multiband_combos(bands):
     return combos
 
 
+def _draw_campaign_alias_vlines(ax, span_days, tol=0.1):
+    """Shaded 2-span campaign aliases from the 48 h edge down to ALIAS_P_MIN_H.
+
+    Only the 2/T + k family is drawn. Each band is an axvspan whose width in
+    period matches the frequency tolerance used to tag a voted peak as an
+    alias: periods between 48/(f+tol) and 48/(f-tol).
+    """
+    span = float(span_days)
+    if not np.isfinite(span) or span <= 0 or tol <= 0:
+        return
+    k_values = list(_campaign_alias_k_range(span))
+    k_first = k_values[0] if k_values else None
+    base = 2.0 / span
+    for k in k_values:
+        freq = base + float(k)
+        f_lo = freq - float(tol)
+        f_hi = freq + float(tol)
+        if f_lo <= 0:
+            continue
+        # Lower frequency -> longer rotation period.
+        p_lo = 48.0 / f_hi
+        p_hi = 48.0 / f_lo
+        ax.axvspan(
+            p_lo,
+            p_hi,
+            color="C4",
+            alpha=0.25,
+            zorder=1,
+            linewidth=0,
+            label=(
+                rf"Campaign aliases ($\pm${tol:.1f})"
+                if k == k_first
+                else None
+            ),
+        )
+
+
 def periodogram_democratic(df_obj, provid, Nb=3, exclude=EXCLUDE_LX):
     """Vote a rotation period from the Nb bands with the most points.
 
@@ -741,7 +807,8 @@ def periodogram_democratic(df_obj, provid, Nb=3, exclude=EXCLUDE_LX):
     day apart, count as the same vote. A unanimous vote uses the period of
     all the bands together. Otherwise the reported period is the Lomb-Scargle
     period of the band with the most points among the series that cast the
-    winning vote.
+    winning vote. A periodogram of the best-sampled band is written with the
+    campaign-alias lines and the voted periods marked.
     """
     counts = (
         df_obj.dropna(subset=[PROP])
@@ -832,6 +899,55 @@ def periodogram_democratic(df_obj, provid, Nb=3, exclude=EXCLUDE_LX):
         f"  democratic (Nb = {int(Nb)}): P_rot = {adopted:.4f} h from {series[chosen]['label']}, "
         f"{len(winner_ids)}/{len(series)} votes ({', '.join(labels)})"
     )
+
+    # Periodogram of the best-sampled band, with campaign aliases and votes.
+    band_plot = str(usable.index[0])
+    df_plot = df_obj[(df_obj["band"] == band_plot) & df_obj[PROP].notna()]
+    t_plot = df_plot["t_days"].to_numpy(float)
+    y_plot = df_plot[PROP].to_numpy(float)
+    dy_plot = df_plot["rmsmag"].fillna(0.01).to_numpy(float)
+    power_plot = np.asarray(
+        LombScargle(t_plot, y_plot, dy_plot).power(freq_grid), dtype=float
+    )
+    p_phot_min = cadence_min_period(t_plot)
+    period_h = 48.0 / freq_grid
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    ax.plot(period_h, power_plot, color="C0", lw=1.0)
+    t_campaign = pd.to_numeric(df_obj["t_days"], errors="coerce").to_numpy(float)
+    t_campaign = t_campaign[np.isfinite(t_campaign)]
+    span = float(np.ptp(t_campaign)) if len(t_campaign) else 0.0
+    _draw_campaign_alias_vlines(ax, span)
+    # One line per distinct voted frequency (merged within 0.1 cycles/day).
+    voted_merged = _merge_frequencies(
+        (48.0 / float(item["p_rot_h"]), item["label"]) for item in series
+    )
+    for group in voted_merged:
+        p_rot = 48.0 / float(group["freq"])
+        is_adopted = abs(p_rot - adopted) <= 0.03 * max(p_rot, adopted)
+        ax.axvline(
+            p_rot,
+            color="0.15" if is_adopted else "C2",
+            ls=":" if is_adopted else "--",
+            lw=1.6 if is_adopted else 1.2,
+            zorder=3,
+            label=(
+                f"vote, {p_rot:.2f} h"
+                if is_adopted
+                else f"{', '.join(group['labels'])}, {p_rot:.2f} h"
+            ),
+        )
+    x_min = 2.0 * p_phot_min if p_phot_min > 0 else 2.0 * PERIODS_H[0]
+    ax.set_xscale("log")
+    ax.set_xlim(x_min, 2.0 * PERIODS_H[1])
+    ax.set_xlabel("Rotation period (h)")
+    ax.set_ylabel("Lomb–Scargle power")
+    ax.set_title(f"{provid} democratic periodogram ({band_plot})")
+    ax.legend(loc="upper left", fontsize=7, frameon=True)
+    ax.grid(True, which="both", alpha=0.3)
+    fig.tight_layout()
+    path = save_figure(fig, output_path("periodogram_democratic", provid))
+    print(f"  democratic periodogram: {path.name}")
+
     return {
         "p_rot_h": adopted,
         "votes": int(len(winner_ids)),
@@ -840,6 +956,7 @@ def periodogram_democratic(df_obj, provid, Nb=3, exclude=EXCLUDE_LX):
         "series": ", ".join(labels),
         "source": series[chosen]["label"],
         "periods_h": periods_h,
+        "path": path,
         "candidates": [
             {
                 "label": item["label"],
@@ -2624,7 +2741,127 @@ def _compare_colors(df_obj, best, present, ref):
     return colors
 
 
-def multiband_photometry_compare(df_obj, provid, candidates):
+def _band_producing_period(df_obj, labels):
+    """Single band with the most points among those that voted for a period."""
+    single = {"Lg", "Lr", "Li", "Lz", "Ly", "Lu"}
+    bands = []
+    for label in labels:
+        text = str(label)
+        if text.startswith(("span", "2-span")):
+            continue
+        if text in single:
+            bands.append(text)
+            continue
+        if "+" in text:
+            for part in text.split("+"):
+                if part in single:
+                    bands.append(part)
+    if not bands:
+        return None
+    counts = {
+        band: int(((df_obj["band"] == band) & df_obj[PROP].notna()).sum())
+        for band in set(bands)
+    }
+    return max(counts, key=counts.get)
+
+
+def _leave_one_night_out_peak(df_obj, band, freq_ref, tol=0.1):
+    """Leave-one-night-out Lomb–Scargle peak for one band.
+
+    For each calendar night left out, the periodogram peak of the remaining
+    points is compared with freq_ref. The period is stable when at least half
+    of the folds with at least five points keep a peak within tol cycles/day.
+    At least three nights and two successful folds are required.
+    """
+    empty = {
+        "stable": False,
+        "n_nights": 0,
+        "n_tested": 0,
+        "n_kept": 0,
+        "periods_h": [],
+        "folds": [],
+        "band": band,
+        "reason": "no band",
+    }
+    if band is None:
+        return empty
+    df_band = df_obj[(df_obj["band"] == band) & df_obj[PROP].notna()].copy()
+    if df_band.empty:
+        empty["reason"] = f"{band} has no points"
+        return empty
+    if "night" not in df_band.columns:
+        df_band["night"] = pd.to_datetime(df_band["obstime"]).dt.floor("D")
+    nights = sorted(df_band["night"].dropna().unique())
+    n_nights = len(nights)
+    if n_nights < 3:
+        return {
+            "stable": False,
+            "n_nights": n_nights,
+            "n_tested": 0,
+            "n_kept": 0,
+            "periods_h": [],
+            "folds": [],
+            "band": band,
+            "reason": f"fewer than 3 nights ({n_nights})",
+        }
+    kept = 0
+    tested = 0
+    periods_h = []
+    folds = []
+    for night in nights:
+        part = df_band[df_band["night"] != night]
+        if len(part) < 5:
+            continue
+        t = part["t_days"].to_numpy(float)
+        y = part[PROP].to_numpy(float)
+        dy = pd.to_numeric(part["rmsmag"], errors="coerce").fillna(0.01).to_numpy(float)
+        freq_grid = frequency_grid(t)
+        power = np.asarray(LombScargle(t, y, dy).power(freq_grid), dtype=float)
+        p_phot_min = cadence_min_period(t)
+        allowed = (24.0 / freq_grid) >= p_phot_min
+        if not np.any(allowed):
+            allowed = np.ones(len(freq_grid), dtype=bool)
+        index = int(np.flatnonzero(allowed)[np.argmax(power[allowed])])
+        f_peak = float(freq_grid[index])
+        p_rot = 48.0 / f_peak
+        power_peak = float(power[index])
+        periods_h.append(p_rot)
+        tested += 1
+        fold_kept = abs(f_peak - float(freq_ref)) <= tol
+        if fold_kept:
+            kept += 1
+        night_str = pd.to_datetime(night).strftime("%Y-%m-%d")
+        folds.append(
+            {
+                "night": night_str,
+                "p_rot_h": float(p_rot),
+                "freq": f_peak,
+                "power": power_peak,
+                "kept": bool(fold_kept),
+                "n_points": int(len(part)),
+            }
+        )
+    # At least half the folds must keep the peak (a true rotation survives
+    # dropping individual nights more often than a campaign-window artifact).
+    stable = tested >= 2 and kept >= 0.5 * tested
+    reason = (
+        f"kept {kept}/{tested} folds within {tol:.1f} d^-1 of "
+        f"{48.0 / float(freq_ref):.2f} h "
+        f"({'stable' if stable else 'unstable'}, need >= half)"
+    )
+    return {
+        "stable": bool(stable),
+        "n_nights": n_nights,
+        "n_tested": tested,
+        "n_kept": kept,
+        "periods_h": periods_h,
+        "folds": folds,
+        "band": band,
+        "reason": reason,
+    }
+
+
+def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
     """Fit a two-peak multiband model at each voted period and keep the best.
 
     Candidates are the periods from the democratic vote. Each is compared with
@@ -2635,7 +2872,20 @@ def multiband_photometry_compare(df_obj, provid, candidates):
     point. u is left out. The figure shows the adopted period and the other
     voted periods that have two peaks. If no model has two peaks, or every
     two-peak model is a campaign alias, the asteroid is left out.
+
+    When nightalias is True and the lowest-chi2 two-peak model is a campaign
+    alias, a leave-one-night-out periodogram of the best-sampled band that
+    voted for that period decides whether the alias is adopted. The peak is
+    stable when at least half of the folds keep it; that period is then kept
+    with its alias label. An unstable peak falls back to the best non-alias
+    two-peak model, or leaves the asteroid out.
     """
+    tag = "nightalias" if nightalias else "compare"
+    figure_kind = (
+        "multiband_photometry_nightalias"
+        if nightalias
+        else "multiband_photometry_compare"
+    )
     alias = {"Lg": "g", "Lr": "r", "Li": "i", "Lz": "z", "Ly": "y", "Lu": "u"}
     filt_order = ["g", "r", "i", "z", "y"]
     ref = "r"
@@ -2654,12 +2904,12 @@ def multiband_photometry_compare(df_obj, provid, candidates):
         df_fit = pd.concat(kept, ignore_index=True)
     if n_rejected:
         print(
-            f"  multiband 2-peak compare: rejected {n_rejected} magnitude outlier(s)"
+            f"  multiband 2-peak {tag}: rejected {n_rejected} magnitude outlier(s)"
         )
     present = [f for f in filt_order if (df_fit["filt"] == f).any()]
     if len(present) < 2:
         print(
-            f"  skip multiband_photometry_compare for {provid}: "
+            f"  skip multiband_photometry_{tag} for {provid}: "
             f"only {len(present)} filter(s) in {present}"
         )
         return None
@@ -2682,7 +2932,7 @@ def multiband_photometry_compare(df_obj, provid, candidates):
     merged = _tag_campaign_aliases(_merge_frequencies(vote_items), t_fit)
     n_alias = sum(1 for cand in merged if _is_baseline_alias(cand["labels"]))
     print(
-        f"  multiband 2-peak compare: {len(merged)} voted periods, "
+        f"  multiband 2-peak {tag}: {len(merged)} voted periods, "
         f"{n_alias} land on a campaign alias"
     )
     ls_power = LombScargleMultiband(t_fit, y_fit, f_fit, s_fit)
@@ -2746,7 +2996,58 @@ def multiband_photometry_compare(df_obj, provid, candidates):
     two_peaks = [item for item in scored if item["n_peaks"] == 2]
     # A campaign alias can fit the nights, so it is not a rotation period.
     rotations = [item for item in two_peaks if not item["span_alias"]]
-    best = rotations[0] if rotations else None
+    nightalias_tested = 0
+    nightalias_stable = 0
+    nightalias_band = ""
+    nightalias_n_nights = 0
+    nightalias_n_kept = 0
+    nightalias_n_tested = 0
+    nightalias_periods = ""
+    best = None
+    if nightalias and two_peaks and two_peaks[0]["span_alias"]:
+        candidate = two_peaks[0]
+        band_lono = _band_producing_period(df_obj, candidate["labels"])
+        lono = _leave_one_night_out_peak(df_obj, band_lono, candidate["freq"])
+        nightalias_tested = 1
+        nightalias_stable = int(lono["stable"])
+        nightalias_band = str(lono.get("band") or "")
+        nightalias_n_nights = int(lono["n_nights"])
+        nightalias_n_kept = int(lono["n_kept"])
+        nightalias_n_tested = int(lono["n_tested"])
+        nightalias_periods = ",".join(
+            f"{fold['p_rot_h']:.4f}:{fold['power']:.3f}"
+            for fold in lono.get("folds", [])
+        )
+        print(
+            f"  multiband 2-peak {tag}: leave-one-night-out on {nightalias_band} "
+            f"at {candidate['p_rot_h']:.4f} h: {lono['reason']}"
+        )
+        for fold in lono.get("folds", []):
+            mark = " kept" if fold["kept"] else ""
+            print(
+                f"    leave out {fold['night']}: P_rot = {fold['p_rot_h']:.4f} h, "
+                f"power = {fold['power']:.3f} (N = {fold['n_points']}){mark}"
+            )
+        if lono["stable"]:
+            best = candidate
+            print(
+                f"  multiband 2-peak {tag}: campaign alias kept after "
+                f"leave-one-night-out ({candidate['p_rot_h']:.4f} h)"
+            )
+        else:
+            best = rotations[0] if rotations else None
+            if best is None:
+                print(
+                    f"  multiband 2-peak {tag}: campaign alias rejected by "
+                    f"leave-one-night-out; {provid} is left out"
+                )
+            else:
+                print(
+                    f"  multiband 2-peak {tag}: campaign alias rejected by "
+                    f"leave-one-night-out; falling back to {best['p_rot_h']:.4f} h"
+                )
+    else:
+        best = rotations[0] if rotations else None
     periods = ",".join(
         f"{item['p_rot_h']:.4f}:{item['chi2_nu']:.2f}:{item['n_peaks']}:"
         f"{item['power']:.3f}:{item['amp_ratio']:.3f}:{item['span_alias']}"
@@ -2762,19 +3063,25 @@ def multiband_photometry_compare(df_obj, provid, candidates):
             f"{alias_mark}{mark}"
         )
         print(_red(line) if item["span_alias"] else line)
-    path = output_path("multiband_photometry_compare", provid)
+    path = output_path(figure_kind, provid)
     if best is None:
         if path.exists():
             path.unlink()
-        if two_peaks:
+        if two_peaks and nightalias_tested and not nightalias_stable:
             print(
-                f"  multiband 2-peak compare: the two-peak models are "
+                f"  multiband 2-peak {tag}: leave-one-night-out rejected "
+                f"the campaign alias; {provid} is left out"
+            )
+            reason = "Campaign alias failed leave-one-night-out"
+        elif two_peaks:
+            print(
+                f"  multiband 2-peak {tag}: the two-peak models are "
                 f"campaign aliases; {provid} is left out"
             )
             reason = "Only campaign aliases have two peaks"
         else:
             print(
-                f"  multiband 2-peak compare: no period with 2 peaks; "
+                f"  multiband 2-peak {tag}: no period with 2 peaks; "
                 f"{provid} is left out"
             )
             reason = "No two-peak period in the multiband comparison"
@@ -2783,13 +3090,26 @@ def multiband_photometry_compare(df_obj, provid, candidates):
             "reject_reason": reason,
             "path": None,
             "periods": periods,
+            "nightalias_tested": nightalias_tested,
+            "nightalias_stable": nightalias_stable,
+            "nightalias_band": nightalias_band,
+            "nightalias_n_nights": nightalias_n_nights,
+            "nightalias_n_tested": nightalias_n_tested,
+            "nightalias_n_kept": nightalias_n_kept,
+            "nightalias_periods": nightalias_periods,
         }
+    n_rot_label = len(rotations) if not best["span_alias"] else len(two_peaks)
     summary = (
-        f"  multiband 2-peak compare: P_rot = {best['p_rot_h']:.4f} h, "
+        f"  multiband 2-peak {tag}: P_rot = {best['p_rot_h']:.4f} h, "
         f"chi2_nu = {best['chi2_nu']:.2f}, power = {best['power']:.3f}, "
         f"A/s = {best['amp_ratio']:.3f}, peaks = 2 "
-        f"(best of {len(rotations)} rotations, {len(scored)} scored)"
+        f"(best of {n_rot_label} rotations, {len(scored)} scored)"
     )
+    if nightalias_tested:
+        summary += (
+            f", leave-one-night-out stable = {nightalias_stable} "
+            f"({nightalias_band})"
+        )
     print(summary)
 
     def voted(item):
@@ -2851,7 +3171,15 @@ def multiband_photometry_compare(df_obj, provid, candidates):
                     label="data 2.5–97.5%",
                 )
                 ax.axhline(faint, color="0.25", ls=":", lw=1.2)
-        mark = ", selected" if selected else ""
+        if selected and item["span_alias"] and nightalias_stable:
+            mark = ", selected, leave-one-night-out"
+            title_color = "blue"
+        elif selected:
+            mark = ", selected"
+            title_color = "black"
+        else:
+            mark = ""
+            title_color = "red" if item["span_alias"] else "black"
         ax.set_title(
             rf"$P_{{rot}}$ = {item['p_rot_h']:.2f} h, "
             rf"$\chi^2_\nu$ = {item['chi2_nu']:.1f}, "
@@ -2860,7 +3188,7 @@ def multiband_photometry_compare(df_obj, provid, candidates):
             rf"$A$ = {item['amp']:.3f}, $A/s$ = {item['amp_ratio']:.2f}"
             "\n" + ", ".join(item["labels"]),
             fontsize=11 if selected else 8,
-            color="red" if item["span_alias"] else "black",
+            color=title_color,
         )
         ax.grid(True, alpha=0.3)
         ax.set_xlim(0, 1)
@@ -2911,8 +3239,9 @@ def multiband_photometry_compare(df_obj, provid, candidates):
                 ax.tick_params(labelleft=False)
         for ax in bottom.values():
             ax.set_xlabel("Phase at the rotation period ($2P$)")
+    title = "nightalias" if nightalias else "comparison"
     fig.suptitle(
-        f"Multiband 2-peak comparison of {provid} ({PROP})",
+        f"Multiband 2-peak {title} of {provid} ({PROP})",
         fontsize=12,
     )
     save_figure(fig, path)
@@ -2936,7 +3265,21 @@ def multiband_photometry_compare(df_obj, provid, candidates):
         "colors": colors,
         "path": path,
         "no_two_peaks": False,
+        "nightalias_tested": nightalias_tested,
+        "nightalias_stable": nightalias_stable,
+        "nightalias_band": nightalias_band,
+        "nightalias_n_nights": nightalias_n_nights,
+        "nightalias_n_tested": nightalias_n_tested,
+        "nightalias_n_kept": nightalias_n_kept,
+        "nightalias_periods": nightalias_periods,
     }
+
+
+def multiband_photometry_nightalias(df_obj, provid, candidates):
+    """Two-peak compare with leave-one-night-out for campaign aliases."""
+    return multiband_photometry_compare(
+        df_obj, provid, candidates, nightalias=True
+    )
 
 
 def _given_periods(df_rot, provid):
@@ -3944,7 +4287,10 @@ def process(
             if csv_ok and "phase_model_compare" in analysis:
                 if "p_rot_cmp_h" not in df_csv.columns:
                     csv_ok = False
-            if csv_ok and "multiband_photometry_compare" in analysis:
+            if csv_ok and (
+                "multiband_photometry_compare" in analysis
+                or "multiband_photometry_nightalias" in analysis
+            ):
                 for column in (
                     "p_rot_h",
                     "power",
@@ -3952,6 +4298,14 @@ def process(
                     "amp_data",
                     "span_alias",
                     "g-r",
+                ):
+                    if column not in df_csv.columns:
+                        csv_ok = False
+            if csv_ok and "multiband_photometry_nightalias" in analysis:
+                for column in (
+                    "nightalias_tested",
+                    "nightalias_stable",
+                    "nightalias_band",
                 ):
                     if column not in df_csv.columns:
                         csv_ok = False
@@ -3992,6 +4346,7 @@ def process(
                 "phase_model",
                 "phase_model_compare",
                 "multiband_photometry_compare",
+                "multiband_photometry_nightalias",
                 "shape_fit",
                 "timemodel",
                 "literature",
@@ -4025,6 +4380,8 @@ def process(
                 )
                 if dem is not None:
                     fit["democratic"] = dem
+                    if dem.get("path") is not None:
+                        written.append(dem["path"])
             wdem = None
             if "periodogram_democratic_weighted" in analysis:
                 wdem = periodogram_democratic_weighted(
@@ -4085,38 +4442,70 @@ def process(
                 fit["phase_model_compare"] = compared
                 if compared["path"] is not None:
                     written.append(compared["path"])
+            vote_merged = None
+            if dem is not None and dem.get("candidates"):
+                vote_merged = _merge_frequencies(
+                    (cand["freq"], cand["label"]) for cand in dem["candidates"]
+                )
             mb_compared = None
             if "multiband_photometry_compare" in analysis:
-                if dem is None or not dem.get("candidates"):
+                if vote_merged is None:
                     print(
                         "  skip multiband_photometry_compare: "
                         "the democratic vote has no candidate periods"
                     )
                 else:
                     mb_compared = multiband_photometry_compare(
-                        df_obj,
-                        provid,
-                        _merge_frequencies(
-                            (cand["freq"], cand["label"])
-                            for cand in dem["candidates"]
-                        ),
+                        df_obj, provid, vote_merged
                     )
                     if mb_compared is not None and mb_compared.get("no_two_peaks"):
-                        return (
-                            None,
-                            mb_compared.get("reject_reason")
-                            or "No two-peak period in the multiband comparison",
-                        )
-                    if mb_compared is not None:
+                        if "multiband_photometry_nightalias" not in analysis:
+                            return (
+                                None,
+                                mb_compared.get("reject_reason")
+                                or "No two-peak period in the multiband comparison",
+                            )
+                    if mb_compared is not None and not mb_compared.get("no_two_peaks"):
                         fit["multiband_photometry_compare"] = mb_compared
                         if mb_compared["path"] is not None:
                             written.append(mb_compared["path"])
-            if mb_compared is not None:
-                _set_fit_period(
-                    fit,
-                    mb_compared["p_rot_h"],
-                    f"Multiband 2-peak compare, chi2_nu = {mb_compared['chi2_nu']:.2f}",
+            mb_nightalias = None
+            if "multiband_photometry_nightalias" in analysis:
+                if vote_merged is None:
+                    print(
+                        "  skip multiband_photometry_nightalias: "
+                        "the democratic vote has no candidate periods"
+                    )
+                else:
+                    mb_nightalias = multiband_photometry_nightalias(
+                        df_obj, provid, vote_merged
+                    )
+                    if mb_nightalias is not None and mb_nightalias.get("no_two_peaks"):
+                        return (
+                            None,
+                            mb_nightalias.get("reject_reason")
+                            or "No two-peak period in the multiband comparison",
+                        )
+                    if mb_nightalias is not None:
+                        fit["multiband_photometry_nightalias"] = mb_nightalias
+                        if mb_nightalias["path"] is not None:
+                            written.append(mb_nightalias["path"])
+            period_fit = None
+            period_label = None
+            if mb_nightalias is not None and not mb_nightalias.get("no_two_peaks"):
+                period_fit = mb_nightalias
+                period_label = (
+                    f"Multiband 2-peak nightalias, chi2_nu = "
+                    f"{mb_nightalias['chi2_nu']:.2f}"
                 )
+            elif mb_compared is not None and not mb_compared.get("no_two_peaks"):
+                period_fit = mb_compared
+                period_label = (
+                    f"Multiband 2-peak compare, chi2_nu = "
+                    f"{mb_compared['chi2_nu']:.2f}"
+                )
+            if period_fit is not None:
+                _set_fit_period(fit, period_fit["p_rot_h"], period_label)
             elif compared is not None:
                 _set_fit_period(
                     fit,
@@ -4129,7 +4518,11 @@ def process(
                 else:
                     source = f"LS democratic weighted {wdem['band_ref']}"
                 _set_fit_period(fit, adopted["p_rot_h"], source)
-            if mb_compared is not None or compared is not None or adopted is not None:
+            if (
+                period_fit is not None
+                or compared is not None
+                or adopted is not None
+            ):
                 stale = []
                 if "phase_model" in analysis:
                     stale.append(output_path("phase_model", provid))
@@ -4209,7 +4602,11 @@ def process(
             written.extend(multi_fit.get("paths", []))
 
         if "timemodel_Lk" in analysis:
-            compared = None if fit is None else fit.get("multiband_photometry_compare")
+            compared = None
+            if fit is not None:
+                compared = fit.get("multiband_photometry_nightalias") or fit.get(
+                    "multiband_photometry_compare"
+                )
             if multi_fit is None or "df_band_k" not in (multi_fit or {}):
                 return (
                     None,
@@ -4306,7 +4703,10 @@ def get_analysis_columns(analysis, rows=None):
         )
     if "phase_model_compare" in analysis:
         cols.extend(["p_rot_cmp_h", "chi2_nu_cmp", "periods_cmp"])
-    if "multiband_photometry_compare" in analysis:
+    if (
+        "multiband_photometry_compare" in analysis
+        or "multiband_photometry_nightalias" in analysis
+    ):
         cols.extend(
             [
                 "p_rot_h",
@@ -4317,6 +4717,18 @@ def get_analysis_columns(analysis, rows=None):
                 "amp_data",
                 "span_alias",
                 *COMPARE_COLOR_COLUMNS,
+            ]
+        )
+    if "multiband_photometry_nightalias" in analysis:
+        cols.extend(
+            [
+                "nightalias_tested",
+                "nightalias_stable",
+                "nightalias_band",
+                "nightalias_n_nights",
+                "nightalias_n_tested",
+                "nightalias_n_kept",
+                "nightalias_periods",
             ]
         )
     if "justfold" in analysis:
@@ -4423,6 +4835,11 @@ def write_analysis_results(rows, replaced, analysis):
         "k_alias_wdem",
         "n_peaks",
         "span_alias",
+        "nightalias_tested",
+        "nightalias_stable",
+        "nightalias_n_nights",
+        "nightalias_n_tested",
+        "nightalias_n_kept",
         "n_peaks_justfold",
         "span_alias_justfold",
     ]
@@ -4575,7 +4992,8 @@ def select_provid_list(provids=None, Nb=3):
     set_fig_dir(fig_dir)
     analysis = {
         "periodogram_democratic",
-        "multiband_photometry_compare",
+        #"multiband_photometry_compare",
+        "multiband_photometry_nightalias",
         #"lightcurve",
         #"periodogram",
         #"periodogram_democratic",
@@ -4715,6 +5133,7 @@ def select_provid_medellin(Nb=3):
     analysis = {
         "periodogram_democratic",
         "multiband_photometry_compare",
+        #"multiband_photometry_nightalias",
         #"lightcurve",
         #"periodogram",
         #"phase_model_compare",
@@ -4733,6 +5152,40 @@ def select_provid_medellin(Nb=3):
             catalogue["band_periodogram"].fillna(BAND).astype(str).str.strip(),
         )
     )
+    selected, df_set, df_rot, analysis, missing = _selection_tables(provids, analysis)
+    selected.attrs["Nb"] = int(Nb)
+    return selected, df_set, df_rot, analysis, missing
+
+
+def select_provid_revisit(Nb=3):
+    """Provids in revisit.csv: leave-one-night-out revisit into figures_nobs."""
+    fig_dir = ROOT / "figures/figures_nobs"
+    set_fig_dir(fig_dir)
+    analysis = {
+        "periodogram_democratic",
+        "multiband_photometry_nightalias",
+        #"multiband_photometry_compare",
+        #"lightcurve",
+        #"periodogram",
+        #"phase_model_compare",
+        #"phase_model",
+        #"shape_fit",
+        #"timemodel",
+        #"shape_fit_multiband",
+        #"spectrum",
+    }
+    if not REVISIT_CATALOG.exists():
+        raise SystemExit(f"Missing revisit list: {REVISIT_CATALOG}")
+    catalogue = pd.read_csv(REVISIT_CATALOG).dropna(subset=["provid"])
+    if "band_periodogram" not in catalogue.columns:
+        catalogue["band_periodogram"] = BAND
+    provids = list(
+        zip(
+            catalogue["provid"].astype(str).str.strip(),
+            catalogue["band_periodogram"].fillna(BAND).astype(str).str.strip(),
+        )
+    )
+    print(f"Revisit list: {len(provids)} asteroids from {REVISIT_CATALOG.name}")
     selected, df_set, df_rot, analysis, missing = _selection_tables(provids, analysis)
     selected.attrs["Nb"] = int(Nb)
     return selected, df_set, df_rot, analysis, missing
@@ -4830,14 +5283,16 @@ def _main(t_start):
         # select_provid_rotfold: the same asteroids, folded at the given period
         # select_provid_medellin: medellin-vro-catalogue.csv
         # select_provid_nobs: 50 to 100 observations, outside the Medellin list
+        # select_provid_revisit: data/revisit.csv (LONO) into figures_nobs
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_all())
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_list())
         selected, df_set, df_rot, analysis, missing = unpack_selection(
-            select_provid_rotation()
+            #select_provid_rotation()
             # select_provid_rotfold()
-            #select_provid_list()
+            # select_provid_list()
             # select_provid_medellin()
             # select_provid_nobs()
+            select_provid_revisit()
         )
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_medellin())
     if not force:
@@ -4946,18 +5401,36 @@ def _main(t_start):
                     row["chi2_nu_cmp"] = compared["chi2_nu"]
                     row["periods_cmp"] = compared["periods"]
 
-                if "multiband_photometry_compare" in analysis and fit.get(
+                mb_row = None
+                if "multiband_photometry_nightalias" in analysis and fit.get(
+                    "multiband_photometry_nightalias"
+                ):
+                    mb_row = fit["multiband_photometry_nightalias"]
+                elif "multiband_photometry_compare" in analysis and fit.get(
                     "multiband_photometry_compare"
                 ):
-                    mb_compared = fit["multiband_photometry_compare"]
-                    row["p_rot_h"] = mb_compared["p_rot_h"]
-                    row["chi2_nu"] = mb_compared["chi2_nu"]
-                    row["n_peaks"] = mb_compared["n_peaks"]
-                    row["power"] = mb_compared["power"]
-                    row["amp_ratio"] = mb_compared["amp_ratio"]
-                    row["amp_data"] = mb_compared["amp_data"]
-                    row["span_alias"] = mb_compared["span_alias"]
-                    row.update(mb_compared.get("colors", {}))
+                    mb_row = fit["multiband_photometry_compare"]
+                if mb_row is not None:
+                    row["p_rot_h"] = mb_row["p_rot_h"]
+                    row["chi2_nu"] = mb_row["chi2_nu"]
+                    row["n_peaks"] = mb_row["n_peaks"]
+                    row["power"] = mb_row["power"]
+                    row["amp_ratio"] = mb_row["amp_ratio"]
+                    row["amp_data"] = mb_row["amp_data"]
+                    row["span_alias"] = mb_row["span_alias"]
+                    row.update(mb_row.get("colors", {}))
+                    if "multiband_photometry_nightalias" in analysis:
+                        row["nightalias_tested"] = mb_row.get("nightalias_tested", 0)
+                        row["nightalias_stable"] = mb_row.get("nightalias_stable", 0)
+                        row["nightalias_band"] = mb_row.get("nightalias_band", "")
+                        row["nightalias_n_nights"] = mb_row.get(
+                            "nightalias_n_nights", 0
+                        )
+                        row["nightalias_n_tested"] = mb_row.get(
+                            "nightalias_n_tested", 0
+                        )
+                        row["nightalias_n_kept"] = mb_row.get("nightalias_n_kept", 0)
+                        row["nightalias_periods"] = mb_row.get("nightalias_periods", "")
 
                 if "justfold" in analysis and fit.get("justfold"):
                     folded = fit["justfold"]
@@ -4975,7 +5448,10 @@ def _main(t_start):
                 if "multiband_photometry" in analysis:
                     if "multiband" in fit and fit["multiband"] is not None:
                         summary = dict(fit["multiband"].get("summary_row", {}))
-                        if "multiband_photometry_compare" in analysis:
+                        if (
+                            "multiband_photometry_compare" in analysis
+                            or "multiband_photometry_nightalias" in analysis
+                        ):
                             for key in COMPARE_COLOR_COLUMNS:
                                 summary.pop(key, None)
                         row.update(summary)
