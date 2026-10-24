@@ -3,7 +3,8 @@
 
 Which asteroids and which figures to write is set in select_provid_all(),
 select_provid_list(), select_provid_rotation(), select_provid_rotfold(),
-select_provid_medellin(), select_provid_nobs(), or select_provid_revisit().
+select_provid_medellin(), select_provid_nobs(), select_provid_revisit(),
+or select_provid_updateH().
 The active one is the call at the start of main().
 
 Writes, into figall/, as WebP at half the previous resolution:
@@ -61,6 +62,7 @@ _PREV_STDOUT = None
 ROTATION_CATALOG = DATA_DIR / "asteroids-with-rotation.csv"
 MEDELLIN_CATALOG = DATA_DIR / "medellin-vro-list.csv"
 REVISIT_CATALOG = DATA_DIR / "revisit.csv"
+UPDATEH_CATALOG = DATA_DIR / "updateH.csv"
 DESIGNATIONS = DATA_DIR / "mpc_designations.csv"
 OBS_FILE = DATA_DIR / "obs_sbn_X05_full_mpc_desig.parquet"
 
@@ -5191,6 +5193,71 @@ def select_provid_revisit(Nb=3):
     return selected, df_set, df_rot, analysis, missing
 
 
+def select_provid_updateH(n_min=100, n_max=10000, Nb=3):
+    """Provids in updateH.csv (no-H recovery), into figures_nobs/updateH.
+
+    Same analyses as select_provid_nobs. Keeps only list members with
+    n_obs between n_min and n_max.
+    """
+    fig_dir = ROOT / "figures/figures_nobs/updateH"
+    set_fig_dir(fig_dir)
+    analysis = {
+        "periodogram_democratic",
+        "multiband_photometry_nightalias",
+        #"lightcurve",
+        #"periodogram",
+        #"periodogram_democratic",
+        #"periodogram_democratic_weighted",
+        #"phase",
+        #"phase_model",
+        #"shape_fit",
+        #"timemodel",
+        #"multiband_photometry",
+        #"shape_fit_multiband",
+        #"spectrum",
+    }
+    check_analysis(analysis, "analysis")
+
+    if not UPDATEH_CATALOG.exists():
+        raise SystemExit(f"Missing updateH list: {UPDATEH_CATALOG}")
+    wanted = (
+        pd.read_csv(UPDATEH_CATALOG)
+        .dropna(subset=["provid"])["provid"]
+        .astype(str)
+        .str.strip()
+    )
+    wanted_set = set(wanted)
+    print(f"UpdateH list: {len(wanted_set)} asteroids from {UPDATEH_CATALOG.name}")
+
+    df_rot = load_rotation_catalog()
+    df_set = load_df_set()
+    df_obs = observation_counts(df_set)
+    selected = df_obs[
+        df_obs["provid"].isin(wanted_set)
+        & (df_obs["n_obs"] >= n_min)
+        & (df_obs["n_obs"] <= n_max)
+    ].reset_index(drop=True)
+    selected["band"] = BAND
+    n_listed = len(wanted_set)
+    n_kept = len(selected)
+    print(
+        f"{n_kept} of {n_listed} updateH asteroids with {n_min} to {n_max} "
+        f"observations ({n_listed - n_kept} outside that range or missing)"
+    )
+    if selected.empty:
+        raise SystemExit(
+            f"No updateH asteroids with {n_min} to {n_max} observations."
+        )
+
+    present = set(selected["provid"].astype(str))
+    missing = [p for p in wanted if p not in present]
+    selected.attrs["missing"] = missing
+    selected.attrs["exclude_lx"] = EXCLUDE_LX
+    selected.attrs["Nb"] = int(Nb)
+    df_set = df_set[df_set["provid"].isin(selected["provid"])].copy()
+    return selected, df_set, df_rot, analysis, missing
+
+
 def print_processing_report(total_requested, succeeded, failed, fig_dir=None, elapsed_s=None):
     """Print and save a summary report showing success and failure due to missing data."""
     n_succeeded = len(succeeded)
@@ -5284,6 +5351,7 @@ def _main(t_start):
         # select_provid_medellin: medellin-vro-catalogue.csv
         # select_provid_nobs: 50 to 100 observations, outside the Medellin list
         # select_provid_revisit: data/revisit.csv (LONO) into figures_nobs
+        # select_provid_updateH: data/updateH.csv into figures_nobs/updateH
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_all())
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_list())
         selected, df_set, df_rot, analysis, missing = unpack_selection(
@@ -5292,7 +5360,8 @@ def _main(t_start):
             # select_provid_list()
             # select_provid_medellin()
             # select_provid_nobs()
-            select_provid_revisit()
+            # select_provid_revisit()
+            select_provid_updateH()
         )
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_medellin())
     if not force:
