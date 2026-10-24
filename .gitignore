@@ -8,5 +8,7 @@ test_dev
 **/output/*
 **/*.err
 **/*.log
+code/figures/figures_*
+**/gallapp/
 .venv/
 *.db

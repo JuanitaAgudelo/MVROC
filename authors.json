@@ -1,0 +1,56 @@
+[
+  {
+    "person_or_org": {
+      "type": "personal",
+      "family_name": "Zuluaga",
+      "given_name": "Jorge I.",
+      "identifiers": [{ "scheme": "orcid", "identifier": "0000-0002-6140-3116" }]
+    },
+    "affiliations": [{ "name": "Universidad de Antioquia" }]
+  },
+  {
+    "person_or_org": {
+      "type": "personal",
+      "family_name": "Pan",
+      "given_name": "Nicolás",
+      "identifiers": [{ "scheme": "orcid", "identifier": "0009-0005-1190-9441" }]
+    },
+    "affiliations": [{ "name": "Universidad de la República" }]
+  },
+  {
+    "person_or_org": {
+      "type": "personal",
+      "family_name": "Agudelo Quiceno",
+      "given_name": "Juanita",
+      "identifiers": [{ "scheme": "orcid", "identifier": "0009-0005-2157-8826" }]
+    },
+    "affiliations": [{ "name": "Universidad de Antioquia" }]
+  },
+  {
+    "person_or_org": {
+      "type": "personal",
+      "family_name": "Burgoa Camacho",
+      "given_name": "Valeria Judith",
+      "identifiers": [{ "scheme": "orcid", "identifier": "0009-0002-1175-7263" }]
+    },
+    "affiliations": [{ "name": "Universidad Mayor de San Andrés" }]
+  },
+  {
+    "person_or_org": {
+      "type": "personal",
+      "family_name": "Gutiérrez Estupiñán",
+      "given_name": "Angie Melissa",
+      "identifiers": [{ "scheme": "orcid", "identifier": "0009-0003-0595-9325" }]
+    },
+    "affiliations": [{ "name": "Universidad Industrial de Santander" }]
+  },
+  {
+    "person_or_org": {
+      "type": "personal",
+      "family_name": "Bernardinelli",
+      "given_name": "Pedro",
+      "identifiers": [{ "scheme": "orcid", "identifier": "0000-0003-0743-9422" }]
+    },
+    "affiliations": [{ "name": "Universidade de São Paulo" }]
+  }
+]
