@@ -50,7 +50,9 @@ def choose_selection(cli_provids):
         # cp.select_provid_medellin()
         # cp.select_provid_nobs()
         # cp.select_provid_revisit()
-        cp.select_provid_updateH()
+        # cp.select_provid_updateH()
+        # cp.select_provid_twoprov()
+        cp.select_provid_literature()
     )
 
 
