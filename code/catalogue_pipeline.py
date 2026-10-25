@@ -3101,6 +3101,15 @@ def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
             "nightalias_periods": nightalias_periods,
         }
     n_rot_label = len(rotations) if not best["span_alias"] else len(two_peaks)
+    # Adopted a non-alias while a lower-chi2 two-peak campaign alias was rejected
+    # (default compare, or leave-one-night-out that did not keep the alias).
+    alias_remnant = (
+        not best["span_alias"]
+        and any(
+            item["span_alias"] and item["chi2_nu"] < best["chi2_nu"]
+            for item in two_peaks
+        )
+    )
     summary = (
         f"  multiband 2-peak {tag}: P_rot = {best['p_rot_h']:.4f} h, "
         f"chi2_nu = {best['chi2_nu']:.2f}, power = {best['power']:.3f}, "
@@ -3112,6 +3121,8 @@ def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
             f", leave-one-night-out stable = {nightalias_stable} "
             f"({nightalias_band})"
         )
+    if alias_remnant:
+        summary += ", alias remnant"
     print(summary)
 
     def voted(item):
@@ -3182,6 +3193,7 @@ def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
         else:
             mark = ""
             title_color = "red" if item["span_alias"] else "black"
+        show_remnant = bool(selected and alias_remnant)
         ax.set_title(
             rf"$P_{{rot}}$ = {item['p_rot_h']:.2f} h, "
             rf"$\chi^2_\nu$ = {item['chi2_nu']:.1f}, "
@@ -3191,7 +3203,22 @@ def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
             "\n" + ", ".join(item["labels"]),
             fontsize=11 if selected else 8,
             color=title_color,
+            pad=22 if show_remnant else 6,
         )
+        if show_remnant:
+            # Red label only; the rest of the title stays in title_color.
+            ax.text(
+                0.5,
+                1.0,
+                "alias remnant",
+                transform=ax.transAxes,
+                color="red",
+                fontsize=11,
+                fontweight="bold",
+                ha="center",
+                va="bottom",
+                clip_on=False,
+            )
         ax.grid(True, alpha=0.3)
         ax.set_xlim(0, 1)
         if selected:
@@ -5357,11 +5384,11 @@ def _main(t_start):
         selected, df_set, df_rot, analysis, missing = unpack_selection(
             #select_provid_rotation()
             # select_provid_rotfold()
-            # select_provid_list()
+            select_provid_list()
             # select_provid_medellin()
             # select_provid_nobs()
             # select_provid_revisit()
-            select_provid_updateH()
+            # select_provid_updateH()
         )
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_medellin())
     if not force:

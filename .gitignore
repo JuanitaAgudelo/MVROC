@@ -1,4 +1,5 @@
 .DS_Store
+.vscode/
 __pycache__/
 **/test_dev/**
 **/test_dev/
