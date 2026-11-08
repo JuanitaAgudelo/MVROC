@@ -10,6 +10,8 @@ test_dev
 **/*.err
 **/*.log
 code/figures/figures_*
+# Local gallapp checkout symlink (keep on disk; never commit).
+code/gallapp
 **/gallapp/
 .venv/
 *.db

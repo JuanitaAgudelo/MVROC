@@ -5,8 +5,8 @@ Which asteroids and which figures to write is set in select_provid_all(),
 select_provid_list(), select_provid_rotation(), select_provid_rotfold(),
 select_provid_medellin(), select_provid_nobs(), select_provid_revisit(),
 select_provid_updateH(), select_provid_twoprov(), select_provid_literature(),
-select_provid_literature_selrule(), or select_provid_MOI(). The active one is
-the call at the start of main().
+select_provid_literature_selrule(), select_provid_MOI(), or
+select_MOC_solutions(). The active one is the call at the start of main().
 
 Writes, into figall/, as WebP at half the previous resolution:
   <provid>_observations.csv
@@ -23,7 +23,7 @@ Writes, into figall/, as WebP at half the previous resolution:
   <provid>_multiband_photometry_compare.webp
   <provid>_multiband_photometry_nightalias.webp
   <provid>_multiband_photometry_compare_literature.webp
-  <provid>_folding_solution.webp
+  <provid>_folding_solution.webp          (select_MOC_solutions / select_provid_MOI)
   <provid>_phase_shape_fit_sol<N>.webp   (select_provid_MOI shape_fit_solution)
   <provid>_justfold.webp
   <provid>_phase_spheres_fit.webp
@@ -1333,11 +1333,11 @@ def plot_phase_allbands(
         return path
     t0 = fit["t_band"].min()
     if freq_sel is None:
-    freq_sel = fit["freq_sel"]
+        freq_sel = fit["freq_sel"]
     if per_sel is None:
-    per_sel = fit["per_sel"]
+        per_sel = fit["per_sel"]
     if source is None:
-    source = fit.get("period_source") or f"Periodogram {fit.get('band', BAND)}"
+        source = fit.get("period_source") or f"Periodogram {fit.get('band', BAND)}"
     present = [
         b for b in ALL_BANDS if b not in ("u", "Lu") and (df_obj["band"] == b).any()
     ]
@@ -5640,13 +5640,26 @@ def process(
                     and "chi_r_sph" in df_csv.columns
                     and "q_sph" in df_csv.columns
                 )
+            elif "folding_solution" in analysis:
+                # Fold-only MOC report: solution_id + fold metrics (no epoch/n_obs).
+                csv_ok = (
+                    (df_csv["provid"].astype(str) == str(provid)).any()
+                    and "solution_id" in df_csv.columns
+                    and "p_rot_h" in df_csv.columns
+                    and "chi2_nu" in df_csv.columns
+                )
             else:
-            csv_ok = (provid in df_csv["provid"].values) and (
-                "epoch_utc_ini" in df_csv.columns
+                csv_ok = (provid in df_csv["provid"].values) and (
+                    "epoch_utc_ini" in df_csv.columns
                     and "obs_duration" in df_csv.columns
-            )
+                )
             requested = BAND if band is None or str(band).strip() == "" else str(band).strip()
-            if csv_ok and "shape_fit_solution" not in analysis and requested != "Lx":
+            if (
+                csv_ok
+                and "shape_fit_solution" not in analysis
+                and "folding_solution" not in analysis
+                and requested != "Lx"
+            ):
                 if "band_periodogram" not in df_csv.columns:
                     csv_ok = requested == BAND
                 else:
@@ -5704,27 +5717,28 @@ def process(
                 if "p_rot_justfold_h" not in df_csv.columns:
                     csv_ok = False
             if csv_ok and "folding_solution" in analysis:
-                if "shape_fit_solution" in analysis:
-                    # Combined MOI CSV uses solution_id, not solution/solution_kind.
-                    for column in ("solution_id", "p_rot_h", "chi2_nu", "amp"):
-                        if column not in df_csv.columns:
-                            csv_ok = False
-                            break
-                else:
-                    for column in (
-                        "solution",
-                        "solution_kind",
-                        "p_rot_h",
-                        "chi2_nu",
-                        "amp",
-                        "amp_ratio",
-                        "span_alias",
-                    ):
-                        if column not in df_csv.columns:
-                            csv_ok = False
-                            break
-                if csv_ok and (df_csv["provid"].astype(str) == str(provid)).sum() < 1:
+                # Fold / MOI CSV uses solution_id + fold metrics (no lit rows).
+                for column in ("solution_id", "p_rot_h", "chi2_nu", "amp"):
+                    if column not in df_csv.columns:
+                        csv_ok = False
+                        break
+                mine = df_csv["provid"].astype(str) == str(provid)
+                if csv_ok and mine.sum() < 1:
                     csv_ok = False
+                # Incomplete fold colour dump: filters list z but i-z was dropped.
+                if (
+                    csv_ok
+                    and "filters" in df_csv.columns
+                    and "i-z" in df_csv.columns
+                ):
+                    sub = df_csv.loc[mine]
+                    listed_z = (
+                        sub["filters"]
+                        .astype(str)
+                        .str.contains(r"(?:^|,)z(?:,|$)", regex=True, na=False)
+                    )
+                    if bool(listed_z.any()) and not bool(sub.loc[listed_z, "i-z"].notna().any()):
+                        csv_ok = False
         except Exception:
             csv_ok = False
 
@@ -5838,7 +5852,7 @@ def process(
                 )
                 if wdem is not None:
                     fit["democratic_weighted"] = wdem
-                    if "phase" in analysis:
+            if "phase" in analysis:
                 written.append(
                     plot_phase_allbands(
                         df_obj,
@@ -6009,28 +6023,28 @@ def process(
                 or adopted is not None
             ):
                 stale = []
-                    if "phase_model" in analysis:
-                        stale.append(output_path("phase_model", provid))
-                    if "timemodel" in analysis:
-                        stale.append(output_path("timemodel", provid))
+                if "phase_model" in analysis:
+                    stale.append(output_path("phase_model", provid))
+                if "timemodel" in analysis:
+                    stale.append(output_path("timemodel", provid))
                 if "timemodel_Lk" in analysis:
                     stale.append(output_path("timemodel_Lk", provid))
-                    if "shape_fit" in analysis:
-                        stale.extend(
-                            [
-                                output_path("spheres", provid),
-                                output_path("ellipsoid", provid),
-                            ]
-                        )
-                    if "literature" in analysis:
-                        stale.append(output_path("literature", provid))
-                    if "multiband_photometry" in analysis:
-                        stale.append(output_path("multiband_phase_model", provid))
-                    if "shape_fit_multiband" in analysis:
-                        stale.append(output_path("shape_multiband", provid))
-                    for stale_path in stale:
-                        if stale_path.exists():
-                            stale_path.unlink()
+                if "shape_fit" in analysis:
+                    stale.extend(
+                        [
+                            output_path("spheres", provid),
+                            output_path("ellipsoid", provid),
+                        ]
+                    )
+                if "literature" in analysis:
+                    stale.append(output_path("literature", provid))
+                if "multiband_photometry" in analysis:
+                    stale.append(output_path("multiband_phase_model", provid))
+                if "shape_fit_multiband" in analysis:
+                    stale.append(output_path("shape_multiband", provid))
+                for stale_path in stale:
+                    if stale_path.exists():
+                        stale_path.unlink()
             if "phase_model" in analysis:
                 written.append(Lr_phase_curve(provid, fit))
             if "shape_fit" in analysis:
@@ -6192,7 +6206,10 @@ def _moi_solution_result_rows(provid, fit):
                 if key in sol:
                     row[key] = sol[key]
             for key, value in sol.items():
+                # Band counts and every colour index from the joint fold.
                 if key.startswith("n_obs_") or key in COMPARE_COLOR_COLUMNS:
+                    row[key] = value
+                elif isinstance(key, str) and "-" in key:
                     row[key] = value
             shaped = shape_by_id.get(sid)
             if shaped:
@@ -6228,15 +6245,19 @@ def get_analysis_columns(analysis, rows=None):
         "shape_fit_multiband",
         "spectrum",
     }
+    # One row per retained MVROC period (fold metrics ± shape). Used by
+    # select_MOC_solutions (fold only) and select_provid_MOI (fold + shape).
     moi_report = (
-        "shape_fit_solution" in analysis
-        and not other_row
+        not other_row
         and (
             "folding_solution" in analysis
-            or analysis <= {"observations", "shape_fit_solution", "compare"}
+            or "shape_fit_solution" in analysis
         )
+        and analysis
+        <= {"observations", "folding_solution", "shape_fit_solution", "compare"}
     )
     if moi_report:
+        n_obs_cols = [f"n_obs_{b}" for b in ("u", "g", "r", "i", "z", "y")]
         cols = [
             "provid",
             "solution_id",
@@ -6254,11 +6275,15 @@ def get_analysis_columns(analysis, rows=None):
             "n_filters",
             "ref_filter",
             *COMPARE_COLOR_COLUMNS,
+            *n_obs_cols,
             *SHAPE_COLUMNS,
         ]
+        # Never drop colour / n_obs columns across incremental flushes: an early
+        # batch without z would otherwise reindex away i-z from later rows.
+        keep_always = {"provid", *COMPARE_COLOR_COLUMNS, *n_obs_cols}
         if rows:
             seen_keys = {k for r in rows for k in r.keys()}
-            cols = [c for c in cols if c in seen_keys or c == "provid"]
+            cols = [c for c in cols if c in seen_keys or c in keep_always]
             extra = [k for r in rows for k in r.keys() if k not in cols]
             cols.extend(dict.fromkeys(extra))
         return cols
@@ -6441,6 +6466,9 @@ def write_analysis_results(rows, replaced, analysis):
         return None
     columns = get_analysis_columns(analysis, rows)
     new = pd.DataFrame(rows)
+    # Keep any columns present in the new rows even if an earlier flush had a
+    # narrower schema (e.g. no z colours yet).
+    columns = list(dict.fromkeys([*columns, *new.columns.tolist()]))
     for c in columns:
         if c not in new.columns:
             new[c] = np.nan
@@ -6919,6 +6947,48 @@ def merge_equivalent_provids(df_set, groups):
     return merged, alias_map
 
 
+def merge_moi_dual_provid_photometry(df_set, wanted_provids):
+    """Join dual-provid aliases onto the names used in solutions.csv.
+
+    ``rubin_objects_two_provids.csv`` prefers the MPC designation as canonical
+    (e.g. 2015 KR298), but MOI lists keep the discovery-style name (2025 MA45).
+    Photometry of every alias is remapped onto that MOI name so folding sees
+    the combined light curve.
+    """
+    wanted = {str(p).strip() for p in wanted_provids}
+    alias_map = {}
+    for group in load_two_provid_aliases():
+        provids = [str(p).strip() for p in group["provids"]]
+        hits = [p for p in provids if p in wanted]
+        if not hits:
+            continue
+        target = hits[0]
+        for provid in provids:
+            alias_map[provid] = target
+    if not alias_map:
+        merged = df_set[
+            df_set["provid"].astype(str).str.strip().isin(wanted)
+        ].copy()
+        return merged, alias_map
+
+    keep = df_set["provid"].astype(str).str.strip().isin(set(alias_map) | wanted)
+    merged = df_set.loc[keep].copy()
+    merged["provid"] = (
+        merged["provid"].astype(str).str.strip().map(lambda p: alias_map.get(p, p))
+    )
+    merged = merged[merged["provid"].isin(wanted)].copy()
+    merged = merged.sort_values(
+        by=["provid", "band", "obstime"],
+        ascending=[True, True, True],
+    ).reset_index(drop=True)
+    n_joined = len({t for t in alias_map.values() if t in wanted})
+    print(
+        f"  dual-provid merge: {n_joined} MOI asteroids joined from "
+        f"{TWOPROV_CATALOG.name}"
+    )
+    return merged, alias_map
+
+
 def select_provid_twoprov(n_min=100, Nb=3):
     """Dual-provid asteroids with combined n_obs >= n_min.
 
@@ -7260,6 +7330,73 @@ def select_provid_literature_selrule(Nb=3):
     return selected, df_set, df_lit, analysis, missing
 
 
+def select_MOC_solutions(Nb=3):
+    """MOC solutions: fold every retained period into figures_mvroc_sol.
+
+    Reads provids and periods from figures/figures_MOI/solutions.csv. Runs
+    observations + folding_solution only (no shape fits). Figures and the
+    results CSV go to figures/figures_mvroc_sol. One CSV row per MVROC
+    solution (solution_id, fold metrics, colours); literature panels are
+    drawn but not written. No epoch / object n_obs columns.
+    """
+    fig_dir = ROOT / "figures" / "figures_mvroc_sol"
+    set_fig_dir(fig_dir)
+    analysis = {
+        "observations",
+        "folding_solution",
+    }
+    check_analysis(analysis, "analysis")
+
+    if not MOI_SOLUTIONS.exists():
+        raise SystemExit(f"Missing MOI solutions list: {MOI_SOLUTIONS}")
+    if not MOI_SELECTION.exists():
+        raise SystemExit(f"Missing MOI selection: {MOI_SELECTION}")
+
+    solutions = load_moi_solutions(MOI_SOLUTIONS)
+    selection = pd.read_csv(MOI_SELECTION)
+    selection["provid"] = selection["provid"].astype(str).str.strip()
+    wanted = solutions["provid"].astype(str).str.strip().tolist()
+    wanted_set = set(wanted)
+    n_sol = int(solutions["solutions"].astype(str).str.split("/").map(len).sum())
+    print(
+        f"MOC solutions folding list: {len(wanted)} asteroids, "
+        f"{n_sol} MVROC solutions from {MOI_SOLUTIONS.name}"
+    )
+
+    df_lit = load_literature_rotation()
+    df_lit.attrs["moi_solutions"] = solutions
+    df_set_full = load_df_set()
+    df_set, alias_map = merge_moi_dual_provid_photometry(df_set_full, wanted_set)
+    df_obs = observation_counts(df_set)
+    selected = df_obs[df_obs["provid"].isin(wanted_set)].reset_index(drop=True)
+    selected["band"] = BAND
+    order = {p: i for i, p in enumerate(wanted)}
+    selected["_o"] = selected["provid"].map(order)
+    selected = selected.sort_values("_o").drop(columns="_o").reset_index(drop=True)
+
+    present = set(selected["provid"].astype(str))
+    missing = [p for p in wanted if p not in present]
+    if missing:
+        print(
+            f"  {len(missing)} MOC asteroids have no photometry in the observation set"
+        )
+    if selected.empty:
+        raise SystemExit("No MOC asteroids found in the observation set.")
+
+    selected.attrs["missing"] = missing
+    selected.attrs["exclude_lx"] = EXCLUDE_LX
+    selected.attrs["Nb"] = int(Nb)
+    selected.attrs["moi_solutions"] = solutions
+    selected.attrs["alias_map"] = alias_map
+    df_set = df_set[df_set["provid"].isin(selected["provid"])].copy()
+    n_in_sel = int(selection["provid"].isin(wanted_set).sum())
+    print(
+        f"{len(selected)} MOC asteroids selected for folding "
+        f"({n_in_sel} also listed in {MOI_SELECTION.name}) → {fig_dir}"
+    )
+    return selected, df_set, df_lit, analysis, missing
+
+
 def select_provid_MOI(Nb=3):
     """MVROC-MOI asteroids: folding, then shape fit, in figures_MOI_folding.
 
@@ -7268,6 +7405,8 @@ def select_provid_MOI(Nb=3):
     (MVROC solutions only). Both figure sets go to figures/figures_MOI_folding.
     The results CSV has one row per MVROC solution (solution_id + fold metrics
     + shape params); no literature rows and no epoch/n_obs columns.
+
+    For fold-only (no shape), use select_MOC_solutions → figures_mvroc_sol.
     """
     fig_dir = ROOT / "figures/figures_MOI_folding"
     set_fig_dir(fig_dir)
@@ -7296,7 +7435,8 @@ def select_provid_MOI(Nb=3):
 
     df_lit = load_literature_rotation()
     df_lit.attrs["moi_solutions"] = solutions
-    df_set = load_df_set()
+    df_set_full = load_df_set()
+    df_set, alias_map = merge_moi_dual_provid_photometry(df_set_full, wanted_set)
     df_obs = observation_counts(df_set)
     selected = df_obs[df_obs["provid"].isin(wanted_set)].reset_index(drop=True)
     selected["band"] = BAND
@@ -7317,6 +7457,7 @@ def select_provid_MOI(Nb=3):
     selected.attrs["exclude_lx"] = EXCLUDE_LX
     selected.attrs["Nb"] = int(Nb)
     selected.attrs["moi_solutions"] = solutions
+    selected.attrs["alias_map"] = alias_map
     df_set = df_set[df_set["provid"].isin(selected["provid"])].copy()
     n_in_sel = int(selection["provid"].isin(wanted_set).sum())
     print(
@@ -7489,6 +7630,7 @@ def _main(t_start):
         # select_provid_twoprov: dual MPC provids merged, combined n_obs >= 100
         # select_provid_literature: Greenstreet (combined n_obs) + SBDB rot_per, n_obs >= 100
         # select_provid_literature_selrule: lit↔alias + nobs selrule-keep, literature+selrule
+        # select_MOC_solutions: figures_MOI/solutions.csv → fold only → figures_mvroc_sol
         # select_provid_MOI: figures_MOI/solutions.csv → folding + shape_fit
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_all())
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_list())
@@ -7503,7 +7645,8 @@ def _main(t_start):
             # select_provid_twoprov()
             # select_provid_literature()
             # select_provid_literature_selrule()
-            select_provid_MOI()
+            # select_provid_MOI()
+            select_MOC_solutions()
         )
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_medellin())
     if not force:
@@ -7715,14 +7858,10 @@ def _main(t_start):
                 ) and (
                     fit.get("shape_fit_solution") or fit.get("folding_solution")
                 ):
-                    # MOI: one row per MVROC solution (fold + shape; no lit/epoch).
-                    if "shape_fit_solution" in analysis:
-                        peak_rows.extend(_moi_solution_result_rows(provid, fit))
-                    else:
-                        for sol in fit["folding_solution"].get("solutions", []):
-                            peak_rows.append({**row, **sol})
+                    # One row per MVROC solution (fold ± shape; no lit panels).
+                    peak_rows.extend(_moi_solution_result_rows(provid, fit))
                 else:
-                peak_rows.append(row)
+                    peak_rows.append(row)
             else:
                 failed[provid] = err or "Not enough data, or an error in the calculation"
 

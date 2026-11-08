@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """Assemble MVROC pipeline products under pipeline/products/ from code/data
-and code/figures (figures_nobs for MOI; figures_MOI / figures_MOI_folding for
+and code/figures (figures_nobs for MOI; figures_MOI / figures_mvroc_sol for
 MOC and solutions).
 
 Run from the repository root:
@@ -19,7 +19,7 @@ import pyarrow.parquet as pq
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "code" / "data"
 MOI = ROOT / "code" / "figures" / "figures_MOI"
-FOLD = ROOT / "code" / "figures" / "figures_MOI_folding"
+FOLD = ROOT / "code" / "figures" / "figures_mvroc_sol"
 NOBS = ROOT / "code" / "figures" / "figures_nobs"
 OBS_SRC = DATA / "obs_sbn_X05_full.parquet"
 OUT = ROOT / "pipeline" / "products"
@@ -765,10 +765,11 @@ def build_moi() -> Path:
 
 
 def build_moc_sol() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """MOC + SOL from figures_MOI / figures_MOI_folding.
+    """MOC + SOL from figures_MOI / figures_mvroc_sol.
 
     Returns (object_meta, moc, sol). object_meta carries per-object fields used
     by mvroc.csv (from the MOC selection, not the observation-level MOI).
+    Fold metrics and colours come from select_MOC_solutions (no shape fits).
     """
     _print("Building db_mvroc_moc / sol …")
     selection = pd.read_csv(MOI / "asteroid_selection.csv")

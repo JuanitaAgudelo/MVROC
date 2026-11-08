@@ -56,7 +56,8 @@ def choose_selection(cli_provids):
         # cp.select_provid_twoprov()
         # cp.select_provid_literature()
         # cp.select_provid_literature_selrule()
-        cp.select_provid_MOI()
+        # cp.select_provid_MOI()
+        cp.select_MOC_solutions()
     )
     if not cli_provids:
         return selected, df_set, df_rot, analysis, missing
@@ -156,9 +157,9 @@ def _result_row(df_ast, provid, band, fit, analysis):
     Returns a list when folding_solution or shape_fit_solution draws several
     panels (one row each); otherwise a single-row list.
     """
-    if "shape_fit_solution" in analysis and (
-        fit.get("shape_fit_solution") or fit.get("folding_solution")
-    ):
+    if (
+        "shape_fit_solution" in analysis or "folding_solution" in analysis
+    ) and (fit.get("shape_fit_solution") or fit.get("folding_solution")):
         return cp._moi_solution_result_rows(provid, fit)
 
     epoch_utc_ini, epoch_utc_end, obs_duration = cp.observation_window(df_ast)
@@ -287,11 +288,6 @@ def _result_row(df_ast, provid, band, fit, analysis):
         row.update(fit["shape_k"])
     if "spectrum" in analysis:
         row.update(fit.get("spectrum") or {})
-    if "folding_solution" in analysis and fit.get("folding_solution"):
-        return [
-            {**row, **sol}
-            for sol in fit["folding_solution"].get("solutions", [])
-        ]
     return [row]
 
 
