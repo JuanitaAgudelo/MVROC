@@ -5,8 +5,9 @@ Which asteroids and which figures to write is set in select_provid_all(),
 select_provid_list(), select_provid_rotation(), select_provid_rotfold(),
 select_provid_medellin(), select_provid_nobs(), select_provid_revisit(),
 select_provid_updateH(), select_provid_twoprov(), select_provid_literature(),
-select_provid_literature_selrule(), select_provid_MOI(), or
-select_MOC_solutions(). The active one is the call at the start of main().
+select_provid_literature_selrule(), select_provid_MOI(),
+select_MOC_solutions(), or select_provid_mvroc_moi(). The active one is the
+call at the start of main().
 
 Writes, into figall/, as WebP at half the previous resolution:
   <provid>_observations.csv
@@ -75,6 +76,11 @@ OBS_FILE = DATA_DIR / "obs_sbn_X05_full_mpc_desig.parquet"
 MOI_DIR = ROOT / "figures" / "figures_MOI"
 MOI_SOLUTIONS = MOI_DIR / "solutions.csv"
 MOI_SELECTION = MOI_DIR / "asteroid_selection.csv"
+# Pipeline products (repo/pipeline/products), not code/data/.
+PRODUCTS_DIR = ROOT.parent / "pipeline" / "products"
+STATE_PARQUET = PRODUCTS_DIR / "db_mvroc_state.parquet"
+VRO_MPC_CSV = PRODUCTS_DIR / "db_vro_mpc.csv"
+MOI_OBS_PARQUET = PRODUCTS_DIR / "db_mvroc_moi.parquet"
 
 BAND = "Lr"
 PROP = "H"
@@ -563,6 +569,10 @@ def prepare_object(df_set, provid, designations):
     df_obj = df_obj.sort_values(["band", "obstime"]).reset_index(drop=True)
     t0 = df_obj["obstime"].iloc[0]
     df_obj["t_days"] = (df_obj["obstime"] - t0).dt.total_seconds() / 86400.0
+    # Absolute magnitudes already attached (e.g. db_mvroc_state via
+    # select_provid_mvroc_moi): skip the geometry table under code/data/.
+    if PROP in df_obj.columns and df_obj[PROP].notna().any():
+        return df_obj
     frames = [load_geometry(name) for name in _object_designations(df_obj, provid, designations)]
     frames = [frame for frame in frames if not frame.empty]
     if frames:
@@ -7330,6 +7340,173 @@ def select_provid_literature_selrule(Nb=3):
     return selected, df_set, df_lit, analysis, missing
 
 
+def load_vro_mpc_alias_groups(path=None):
+    """Groups of VRO provids that share one MPC designation in db_vro_mpc.csv."""
+    path = Path(path) if path is not None else VRO_MPC_CSV
+    if not path.exists():
+        raise SystemExit(f"Missing VRO↔MPC cross-match: {path}")
+    table = pd.read_csv(path)
+    table["provid_vro"] = table["provid_vro"].astype(str).str.strip()
+    table["provid_mpc"] = table["provid_mpc"].astype(str).str.strip()
+    groups = []
+    for provid_mpc, part in table.groupby("provid_mpc", sort=False):
+        provids = [
+            p for p in part["provid_vro"].tolist() if p and p not in ("nan", "None")
+        ]
+        provids = list(dict.fromkeys(provids))
+        if len(provids) < 2:
+            continue
+        groups.append({"provid_mpc": str(provid_mpc), "provids": provids})
+    return groups
+
+
+def merge_vro_mpc_equivalent_provids(df_set, groups=None):
+    """Join dual VRO provids that share an MPC designation onto one name.
+
+    The canonical name is the alias with the most rows already in ``df_set``.
+    """
+    if groups is None:
+        groups = load_vro_mpc_alias_groups()
+    counts = df_set.groupby(df_set["provid"].astype(str).str.strip()).size()
+    alias_map = {}
+    for group in groups:
+        present = [p for p in group["provids"] if p in counts.index]
+        if len(present) < 2:
+            continue
+        canonical = max(present, key=lambda p: int(counts.loc[p]))
+        for provid in group["provids"]:
+            alias_map[provid] = canonical
+    if not alias_map:
+        return df_set.copy(), alias_map
+    merged = df_set.copy()
+    merged["provid"] = (
+        merged["provid"].astype(str).str.strip().map(lambda p: alias_map.get(p, p))
+    )
+    merged = merged.sort_values(
+        by=["provid", "band", "obstime"],
+        ascending=[True, True, True],
+    ).reset_index(drop=True)
+    n_joined = len({t for t in alias_map.values()})
+    print(
+        f"  VRO↔MPC dual-provid merge: {n_joined} objects joined from "
+        f"{VRO_MPC_CSV.name}"
+    )
+    return merged, alias_map
+
+
+def load_df_set_mvroc_moi():
+    """MOI photometry from pipeline products: moi obs + state H, no code/data/.
+
+    Band / rmsmag / sky come from ``db_mvroc_moi.parquet``. Absolute magnitude
+    ``H`` is joined from ``db_mvroc_state.parquet`` on observation ``id``.
+    Dual VRO provids that share an MPC designation are merged using
+    ``db_vro_mpc.csv``.
+    """
+    if not MOI_OBS_PARQUET.exists():
+        raise SystemExit(f"Missing MOI observation product: {MOI_OBS_PARQUET}")
+    if not STATE_PARQUET.exists():
+        raise SystemExit(f"Missing state product: {STATE_PARQUET}")
+
+    columns = [
+        "id",
+        "obstime",
+        "permid",
+        "provid",
+        "ra",
+        "dec",
+        "band",
+        "mag",
+        "rmsmag",
+    ]
+    print(f"Loading MOI observations from {MOI_OBS_PARQUET.name} …")
+    df = pd.read_parquet(MOI_OBS_PARQUET, columns=columns)
+    print(f"  {len(df):,} MOI observation rows, {df['provid'].nunique():,} provids")
+
+    print(f"Loading absolute magnitudes from {STATE_PARQUET.name} …")
+    state = pd.read_parquet(
+        STATE_PARQUET, columns=["id", "H", "provid_mpc", "permid"]
+    )
+    state["id"] = pd.to_numeric(state["id"], errors="coerce")
+    df["id"] = pd.to_numeric(df["id"], errors="coerce")
+    state_h = state.dropna(subset=["id"]).drop_duplicates("id", keep="first")
+    df = df.merge(
+        state_h[["id", "H", "provid_mpc"]],
+        on="id",
+        how="left",
+        suffixes=("", "_state"),
+    )
+    n_h = int(df["H"].notna().sum())
+    print(f"  H matched for {n_h:,} / {len(df):,} rows ({100.0 * n_h / max(len(df), 1):.1f}%)")
+
+    df["provid"] = df["provid"].astype(str).str.strip()
+    df = df[df["provid"].ne("") & df["provid"].ne("nan")].copy()
+    df["mpc_designation"] = df["provid_mpc"].astype(str).str.strip()
+    df.loc[df["mpc_designation"].isin(["", "nan", "None"]), "mpc_designation"] = pd.NA
+    if "permid" in df.columns:
+        df["permid"] = df["permid"].astype("string")
+
+    df["band"] = df["band"].map(
+        lambda b: f"L{b}" if pd.notnull(b) and len(str(b)) == 1 else b
+    )
+    df[["ra", "dec", "mag", "rmsmag", "H"]] = df[
+        ["ra", "dec", "mag", "rmsmag", "H"]
+    ].apply(pd.to_numeric, errors="coerce")
+    df["rmsmag"] = df["rmsmag"].where(df["rmsmag"].notna() & (df["rmsmag"] > 0), 0.01)
+    df["obstime"] = pd.to_datetime(df["obstime"])
+    df["night"] = df["obstime"].dt.floor("D")
+
+    df, alias_map = merge_vro_mpc_equivalent_provids(df)
+    df = df.sort_values(
+        by=["provid", "band", "obstime"],
+        ascending=[True, True, True],
+    ).reset_index(drop=True)
+    df.attrs["alias_map"] = alias_map
+    print(
+        f"MOI photometry ready: {len(df):,} rows, "
+        f"{df['provid'].nunique():,} objects → no code/data/obs parquet"
+    )
+    return df
+
+
+def select_provid_mvroc_moi(Nb=3):
+    """MOI light curves from pipeline products into figures_mvroc_moi.
+
+    Uses ``db_mvroc_moi.parquet`` + ``db_mvroc_state.parquet`` (H) and
+    ``db_vro_mpc.csv`` (provid equivalences). Does not read ``code/data/``
+    photometry. Runs democratic periodogram + multiband 2-peak compare.
+    """
+    fig_dir = ROOT / "figures" / "figures_mvroc_moi"
+    set_fig_dir(fig_dir)
+    analysis = {
+        "observations",
+        "periodogram_democratic",
+        "multiband_photometry_compare",
+    }
+    check_analysis(analysis, "analysis")
+
+    df_set = load_df_set_mvroc_moi()
+    df_obs = observation_counts(df_set)
+    selected = df_obs.reset_index(drop=True)
+    selected["band"] = BAND
+    selected = selected.sort_values("n_obs", ascending=False).reset_index(drop=True)
+    if selected.empty:
+        raise SystemExit("No MOI asteroids found in pipeline products.")
+
+    # Democratic / multiband compare do not need literature periods.
+    df_rot = pd.DataFrame(columns=["provid"])
+    missing = []
+    selected.attrs["missing"] = missing
+    selected.attrs["exclude_lx"] = EXCLUDE_LX
+    selected.attrs["Nb"] = int(Nb)
+    selected.attrs["alias_map"] = getattr(df_set, "attrs", {}).get("alias_map", {})
+    selected.attrs["skip_geometry"] = True
+    print(
+        f"{len(selected)} MOI asteroids selected for democratic + multiband "
+        f"compare → {fig_dir}"
+    )
+    return selected, df_set, df_rot, analysis, missing
+
+
 def select_MOC_solutions(Nb=3):
     """MOC solutions: fold every retained period into figures_mvroc_sol.
 
@@ -7632,6 +7809,7 @@ def _main(t_start):
         # select_provid_literature_selrule: lit↔alias + nobs selrule-keep, literature+selrule
         # select_MOC_solutions: figures_MOI/solutions.csv → fold only → figures_mvroc_sol
         # select_provid_MOI: figures_MOI/solutions.csv → folding + shape_fit
+        # select_provid_mvroc_moi: pipeline products (state H + moi obs) → figures_mvroc_moi
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_all())
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_list())
         selected, df_set, df_rot, analysis, missing = unpack_selection(
@@ -7646,7 +7824,8 @@ def _main(t_start):
             # select_provid_literature()
             # select_provid_literature_selrule()
             # select_provid_MOI()
-            select_MOC_solutions()
+            # select_MOC_solutions()
+            select_provid_mvroc_moi()
         )
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_medellin())
     if not force:

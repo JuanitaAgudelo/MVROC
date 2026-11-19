@@ -57,7 +57,8 @@ def choose_selection(cli_provids):
         # cp.select_provid_literature()
         # cp.select_provid_literature_selrule()
         # cp.select_provid_MOI()
-        cp.select_MOC_solutions()
+        # cp.select_MOC_solutions()
+        cp.select_provid_mvroc_moi()
     )
     if not cli_provids:
         return selected, df_set, df_rot, analysis, missing

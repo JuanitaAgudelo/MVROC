@@ -10,9 +10,11 @@ test_dev
 **/*.err
 **/*.log
 code/figures/figures_*
-# Local gallapp checkout symlink (keep on disk; never commit).
+# Local gallapp checkout symlink (keep on disk; never commit to GitHub).
+gallapp
 code/gallapp
 **/gallapp/
+**/gallapp
 .venv/
 *.db
 *.parquet
