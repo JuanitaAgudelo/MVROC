@@ -29,10 +29,14 @@ STATES_PARQUET = f"{OUTPUTS}/states/states.parquet"
 MOIS_PARQUET = f"{OUTPUTS}/mois/mois.parquet"
 
 # ---------------------------------------------------------------------------
-# Legacy products (selection / catalogue stages still under products/)
+# Selection stage outputs (moc list is simulated from products/ for now)
+# ---------------------------------------------------------------------------
+MOC_CSV = f"{OUTPUTS}/moc/moc.csv"
+
+# ---------------------------------------------------------------------------
+# Legacy products (catalogue stages still under products/)
 # ---------------------------------------------------------------------------
 OBSERVATIONS_PARQUET = f"{PRODUCTS}/obs_sbn_X05_full.parquet"
-MOC_CSV = f"{PRODUCTS}/db_mvroc_moc.csv"
 SOL_CSV = f"{PRODUCTS}/db_mvroc_sol.csv"
 CATALOGUE_CSV = f"{PRODUCTS}/mvroc.csv"
 

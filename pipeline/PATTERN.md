@@ -1,7 +1,7 @@
 # MVROC pipeline driver pattern
 
 How to write a stage driver under `pipeline/`. Reference implementations:
-`mvroc.py`, `periodograms.py`, `foldings.py`.
+`mvroc.py`, `periodograms.py`, `foldings.py`, `solutions.py`.
 
 When this document and the code disagree, the code wins — then update this file.
 
@@ -42,7 +42,9 @@ Before writing a driver, declare:
 | 4 | `mois` | `outputs/mois/mois.parquet` | states (MOI filter) |
 | 5 | `periodograms` | `outputs/periodograms/` | mois + states + crossmatches (+ orbits upstream) |
 | 6 | `foldings` | `outputs/foldings/` | periodograms + photometry |
-| 7 | shapefit / MOC / SOL | (future) | foldings |
+| 7 | `moc` | `outputs/moc/moc.csv` | foldings (visual / selected periods) |
+| 8 | `solutions` | `outputs/solutions/` | moc + photometry |
+| 9 | shapefit | (future) | solutions |
 
 ### Rules
 
