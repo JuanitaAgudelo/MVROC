@@ -7,10 +7,11 @@ Usage (always from the pipeline/ directory):
     python periodograms.py 1981_US22
     python periodograms.py all
 
-Reads photometry from products/. Writes figures and the results CSV to
-outputs/periodograms/. Outputs: periodograms.csv, *_periodogram_democratic.webp and
-periodograms.log (same text as the terminal). Rows in periodograms.csv are always
-appended - delete the CSV yourself if you do not want duplicates.
+Upstream stages: crossmatches, orbits, states, mois. Reads photometry via
+mv.load_moi_photometry() from those outputs. Writes figures and the results
+CSV to outputs/periodograms/. Outputs: periodograms.csv, *_periodogram.webp
+and periodograms.log (same text as the terminal). Rows in periodograms.csv
+are always appended - delete the CSV yourself if you do not want duplicates.
 """
 
 import os
@@ -57,31 +58,6 @@ RESULTS_COLUMNS = [
 # ---------------------------------------------------------------------------
 # Periodogram helpers
 # ---------------------------------------------------------------------------
-def cadence_min_period(ts):
-    """Shortest resolvable photometric period: 2 x median delta t.
-
-    Parameters
-    ----------
-    ts : array-like
-        Observation times in days from an arbitrary zero point.
-
-    Returns
-    -------
-    float
-        Minimum photometric period in hours. 0.0 if fewer than two times.
-
-    Examples
-    --------
-    >>> cadence_min_period([0.0, 0.01, 0.02, 0.03])
-    0.48
-    """
-    t_sorted = np.sort(np.asarray(ts, dtype=float))
-    dt_hours = np.diff(t_sorted) * 24.0
-    dt_hours = dt_hours[dt_hours > 0]
-    if len(dt_hours) == 0:
-        return 0.0
-    return 2.0 * float(np.median(dt_hours))
-
 def frequency_grid(ts):
     """Photometric frequency grid (cycles/day) covering PERIODS_H.
 
@@ -153,7 +129,7 @@ def rotation_at_max_power(ts, ys, dys, freq_grid, bands=None):
         power = LombScargle(ts, ys, dys).power(freq_grid)
     else:
         power = LombScargleMultiband(ts, ys, np.asarray(bands), dys).power(freq_grid)
-    p_phot_min = cadence_min_period(ts)
+    p_phot_min = mv.cadence_min_period(ts)
     allowed = (24.0 / freq_grid) >= p_phot_min
     if not np.any(allowed):
         allowed = np.ones(len(freq_grid), dtype=bool)
@@ -250,38 +226,6 @@ def multiband_combos(bands):
     if len(bands) > 2:
         combos.append(list(bands))
     return combos
-
-def merge_frequencies(items, tol=0.1):
-    """Group (frequency, label) pairs that agree within tol cycles/day.
-
-    Parameters
-    ----------
-    items : iterable of (float, str)
-        Photometric frequencies (cycles/day) with a label each.
-    tol : float, optional
-        Absolute frequency tolerance in cycles/day.
-
-    Returns
-    -------
-    list of dict
-        Each dict has freq and labels (list of str).
-
-    Examples
-    --------
-    >>> merge_frequencies([(5.0, "Lr"), (5.05, "Lg"), (7.0, "Li")])
-    [{'freq': 5.0, 'labels': ['Lr', 'Lg']}, {'freq': 7.0, 'labels': ['Li']}]
-    """
-    groups = []
-    for freq, label in items:
-        freq = float(freq)
-        for group in groups:
-            if abs(group["freq"] - freq) <= tol:
-                if label not in group["labels"]:
-                    group["labels"].append(label)
-                break
-        else:
-            groups.append({"freq": freq, "labels": [label]})
-    return groups
 
 def campaign_alias_k_range(span_days, p_min_h=ALIAS_P_MIN_H):
     """Integer daily shifts k for campaign-duration aliases.
@@ -410,14 +354,14 @@ def mvroc_periodogram_plot(
     True
     """
     power = np.asarray(LombScargle(ts, ys, dys).power(freq_grid), dtype=float)
-    p_phot_min = cadence_min_period(ts)
+    p_phot_min = mv.cadence_min_period(ts)
     period_h = 48.0 / freq_grid  # photometric freq -> rotation period
 
     fig, ax = plt.subplots(figsize=(10, 4.5))
     ax.plot(period_h, power, color="C0", lw=1.0)
     draw_campaign_alias_vlines(ax, span_days)
 
-    voted_merged = merge_frequencies(
+    voted_merged = mv.merge_frequencies(
         (48.0 / float(item["p_rot_h"]), item["label"]) for item in series
     )
     for group in voted_merged:
@@ -446,7 +390,7 @@ def mvroc_periodogram_plot(
     ax.grid(True, which="both", alpha=0.3)
     fig.tight_layout()
 
-    path = f"{OUT_DIR}/{mv.slug(provid)}_periodogram_democratic.webp"
+    path = f"{OUT_DIR}/{mv.slug(provid)}_periodogram.webp"
     mv.save_figure(fig, path)
     print(f"  democratic periodogram: {path}")
     return path
@@ -649,32 +593,6 @@ def mvroc_periodogram_asteroid(df, provid, Nb=NB, exclude=EXCLUDE_LX, qplot=True
     return row
 
 # ---------------------------------------------------------------------------
-# Driver
-# ---------------------------------------------------------------------------
-
-def already_in_outputs(provid):
-    """True if provid already has a row in outputs/periodograms/periodograms.csv.
-
-    Parameters
-    ----------
-    provid : str
-        Asteroid name, e.g. "1981 US22".
-
-    Returns
-    -------
-    bool
-
-    Examples
-    --------
-    >>> already_in_outputs("1981 US22")
-    True
-    """
-    if not os.path.isfile(RESULTS_CSV):
-        return False
-    done = pd.read_csv(RESULTS_CSV, usecols=["provid"])["provid"].astype(str)
-    return str(provid) in set(done)
-
-# ---------------------------------------------------------------------------
 # Periodogram driver
 # ---------------------------------------------------------------------------
 def mvroc_periodograms():
@@ -699,19 +617,21 @@ def mvroc_periodograms():
 
     Inputs
     ------
-    products/db_mvroc_moi.parquet
+    outputs/mois/mois.parquet
         MOI photometry (bands, times, errors).
-    products/db_mvroc_state.parquet
+    outputs/states/states.parquet
         Absolute magnitude H joined on observation id.
-    products/db_vro_mpc.csv
+    outputs/crossmatches/crossmatches.csv
         Dual-provid aliases (optional merge).
+    outputs/orbits/orbits.csv
+        Orbital elements (upstream of states; not read directly here).
 
     Outputs
     -------
     outputs/periodograms/periodograms.csv
         One appended row per successful asteroid (created with header if
         missing). Asteroids already listed are skipped.
-    outputs/periodograms/<provid>_periodogram_democratic.webp
+    outputs/periodograms/<provid>_periodogram.webp
         Democratic periodogram figure for each new asteroid.
     outputs/periodograms/periodograms.log
         Same text that is printed on screen (append mode).
@@ -764,7 +684,7 @@ def mvroc_periodograms():
     skipped = []
 
     for i, provid in enumerate(selected["provid"], start=1):
-        if already_in_outputs(provid):
+        if mv.already_in_outputs(provid, RESULTS_CSV):
             print(f"{provid}: already in periodograms.csv, skip")
             skipped.append(provid)
             continue

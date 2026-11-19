@@ -8,7 +8,10 @@ product loaders, path helpers, and small photometry utilities. Science steps
 for a given stage live in that stage's script (e.g. periodograms.py).
 """
 
+import os
+
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
@@ -18,15 +21,25 @@ PRODUCTS = "products"
 OUTPUTS = "outputs"
 
 # ---------------------------------------------------------------------------
-# Data products
+# Upstream stage outputs (simulated from products/ until those drivers exist)
+# ---------------------------------------------------------------------------
+CROSSMATCHES_CSV = f"{OUTPUTS}/crossmatches/crossmatches.csv"
+ORBITS_CSV = f"{OUTPUTS}/orbits/orbits.csv"
+STATES_PARQUET = f"{OUTPUTS}/states/states.parquet"
+MOIS_PARQUET = f"{OUTPUTS}/mois/mois.parquet"
+
+# ---------------------------------------------------------------------------
+# Legacy products (selection / catalogue stages still under products/)
 # ---------------------------------------------------------------------------
 OBSERVATIONS_PARQUET = f"{PRODUCTS}/obs_sbn_X05_full.parquet"
-STATE_PARQUET = f"{PRODUCTS}/db_mvroc_state.parquet"
-MOI_OBS_PARQUET = f"{PRODUCTS}/db_mvroc_moi.parquet"
-VRO_MPC_CSV = f"{PRODUCTS}/db_vro_mpc.csv"
 MOC_CSV = f"{PRODUCTS}/db_mvroc_moc.csv"
 SOL_CSV = f"{PRODUCTS}/db_mvroc_sol.csv"
 CATALOGUE_CSV = f"{PRODUCTS}/mvroc.csv"
+
+# Backward-compatible aliases used by photometry loaders.
+STATE_PARQUET = STATES_PARQUET
+MOI_OBS_PARQUET = MOIS_PARQUET
+VRO_MPC_CSV = CROSSMATCHES_CSV
 
 # ---------------------------------------------------------------------------
 # Shared photometry / figure constants
@@ -121,6 +134,90 @@ def save_figure(fig, path):
     return path
 
 # ---------------------------------------------------------------------------
+# Common driver helpers
+# ---------------------------------------------------------------------------
+def cadence_min_period(ts):
+    """Shortest resolvable photometric period: 2 x median delta t.
+
+    Parameters
+    ----------
+    ts : array-like
+        Observation times in days from an arbitrary zero point.
+
+    Returns
+    -------
+    float
+        Minimum photometric period in hours. 0.0 if fewer than two times.
+
+    Examples
+    --------
+    >>> cadence_min_period([0.0, 0.01, 0.02, 0.03])
+    0.48
+    """
+    t_sorted = np.sort(np.asarray(ts, dtype=float))
+    dt_hours = np.diff(t_sorted) * 24.0
+    dt_hours = dt_hours[dt_hours > 0]
+    if len(dt_hours) == 0:
+        return 0.0
+    return 2.0 * float(np.median(dt_hours))
+
+def merge_frequencies(items, tol=0.1):
+    """Group (frequency, label) pairs that agree within tol cycles/day.
+
+    Parameters
+    ----------
+    items : iterable of (float, str)
+        Photometric frequencies (cycles/day) with a label each.
+    tol : float, optional
+        Absolute frequency tolerance in cycles/day.
+
+    Returns
+    -------
+    list of dict
+        Each dict has freq and labels (list of str).
+
+    Examples
+    --------
+    >>> merge_frequencies([(5.0, "Lr"), (5.05, "Lg"), (7.0, "Li")])
+    [{'freq': 5.0, 'labels': ['Lr', 'Lg']}, {'freq': 7.0, 'labels': ['Li']}]
+    """
+    groups = []
+    for freq, label in items:
+        freq = float(freq)
+        for group in groups:
+            if abs(group["freq"] - freq) <= tol:
+                if label not in group["labels"]:
+                    group["labels"].append(label)
+                break
+        else:
+            groups.append({"freq": freq, "labels": [label]})
+    return groups
+
+def already_in_outputs(provid, results_csv):
+    """True if provid already has a row in the stage results CSV.
+
+    Parameters
+    ----------
+    provid : str
+        Asteroid name, e.g. "1981 US22".
+    results_csv : str
+        Path to the stage CSV, e.g. outputs/foldings/foldings.csv.
+
+    Returns
+    -------
+    bool
+
+    Examples
+    --------
+    >>> already_in_outputs("1981 US22", "outputs/periodograms/periodograms.csv")
+    True
+    """
+    if not os.path.isfile(results_csv):
+        return False
+    done = pd.read_csv(results_csv, usecols=["provid"])["provid"].astype(str)
+    return str(provid) in set(done)
+
+# ---------------------------------------------------------------------------
 # Product loaders
 # ---------------------------------------------------------------------------
 def load_vro_mpc_alias_groups(path=None):
@@ -129,7 +226,7 @@ def load_vro_mpc_alias_groups(path=None):
     Parameters
     ----------
     path : str, optional
-        CSV path (default products/db_vro_mpc.csv).
+        CSV path (default outputs/crossmatches/crossmatches.csv).
 
     Returns
     -------
@@ -176,7 +273,7 @@ def merge_dual_provids(df):
 
     Examples
     --------
-    >>> df = pd.read_parquet("products/db_mvroc_moi.parquet", columns=["provid"])
+    >>> df = pd.read_parquet("outputs/mois/mois.parquet", columns=["provid"])
     >>> out, alias_map = merge_dual_provids(df)
     """
 
@@ -218,13 +315,13 @@ def merge_dual_provids(df):
     return out, alias_map
 
 def load_moi_photometry():
-    """MOI light curves with absolute magnitude H from products/.
+    """MOI light curves with absolute magnitude H from upstream stages.
 
     Joins:
 
-    * Bands / errors / sky: db_mvroc_moi.parquet
-    * Absolute magnitude: db_mvroc_state.parquet (on observation id)
-    * Dual-provid merge: db_vro_mpc.csv
+    * Bands / errors / sky: outputs/mois/mois.parquet
+    * Absolute magnitude: outputs/states/states.parquet (on observation id)
+    * Dual-provid merge: outputs/crossmatches/crossmatches.csv
 
     Returns
     -------
