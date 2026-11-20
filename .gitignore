@@ -26,3 +26,6 @@ pipeline/gdrive-repo
 # Large raw inputs under pipeline/inputs/.
 *.dat.gz
 pipeline/inputs/*
+
+# Private comparison with Carruba et al. (2026) and DES (notebooks, figures, comparison-only functions).
+code/carruba_comparison/
