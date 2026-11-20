@@ -10,6 +10,19 @@ test_dev
 **/*.err
 **/*.log
 code/figures/figures_*
+# Local gallapp checkout symlink (keep on disk; never commit to GitHub).
+gallapp
+code/gallapp
 **/gallapp/
+**/gallapp
+# Local Google Drive repo symlink (keep on disk; never commit to GitHub).
+gdrive-repo
+pipeline/gdrive-repo
+**/gdrive-repo/
+**/gdrive-repo
 .venv/
 *.db
+*.parquet
+# Large raw inputs under pipeline/inputs/.
+*.dat.gz
+pipeline/inputs/*

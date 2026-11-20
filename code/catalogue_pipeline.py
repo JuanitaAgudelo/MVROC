@@ -4,8 +4,10 @@
 Which asteroids and which figures to write is set in select_provid_all(),
 select_provid_list(), select_provid_rotation(), select_provid_rotfold(),
 select_provid_medellin(), select_provid_nobs(), select_provid_revisit(),
-select_provid_updateH(), select_provid_twoprov(), or select_provid_literature().
-The active one is the call at the start of main().
+select_provid_updateH(), select_provid_twoprov(), select_provid_literature(),
+select_provid_literature_selrule(), select_provid_MOI(),
+select_MOC_solutions(), or select_provid_mvroc_moi(). The active one is the
+call at the start of main().
 
 Writes, into figall/, as WebP at half the previous resolution:
   <provid>_observations.csv
@@ -22,6 +24,8 @@ Writes, into figall/, as WebP at half the previous resolution:
   <provid>_multiband_photometry_compare.webp
   <provid>_multiband_photometry_nightalias.webp
   <provid>_multiband_photometry_compare_literature.webp
+  <provid>_folding_solution.webp          (select_MOC_solutions / select_provid_MOI)
+  <provid>_phase_shape_fit_sol<N>.webp   (select_provid_MOI shape_fit_solution)
   <provid>_justfold.webp
   <provid>_phase_spheres_fit.webp
   <provid>_phase_ellipsoid_fit.webp
@@ -69,6 +73,14 @@ UPDATEH_CATALOG = DATA_DIR / "updateH.csv"
 TWOPROV_CATALOG = DATA_DIR / "rubin_objects_two_provids.csv"
 DESIGNATIONS = DATA_DIR / "mpc_designations.csv"
 OBS_FILE = DATA_DIR / "obs_sbn_X05_full_mpc_desig.parquet"
+MOI_DIR = ROOT / "figures" / "figures_MOI"
+MOI_SOLUTIONS = MOI_DIR / "solutions.csv"
+MOI_SELECTION = MOI_DIR / "asteroid_selection.csv"
+# Pipeline products (repo/products), not code/data/.
+PRODUCTS_DIR = ROOT.parent / "products"
+STATE_PARQUET = PRODUCTS_DIR / "db_mvroc_state.parquet"
+VRO_MPC_CSV = PRODUCTS_DIR / "db_vro_mpc.csv"
+MOI_OBS_PARQUET = PRODUCTS_DIR / "db_mvroc_moi.parquet"
 
 BAND = "Lr"
 PROP = "H"
@@ -94,6 +106,8 @@ ANALYSIS = (
     "multiband_photometry_compare",
     "multiband_photometry_nightalias",
     "multiband_photometry_compare_literature",
+    "folding_solution",
+    "shape_fit_solution",
     "justfold",
     "shape_fit",
     "timemodel",
@@ -192,6 +206,7 @@ def output_path(kind, provid):
         "multiband_photometry_compare_literature": (
             "multiband_photometry_compare_literature"
         ),
+        "folding_solution": "folding_solution",
         "justfold": "justfold",
         "spheres": "phase_spheres_fit",
         "ellipsoid": "phase_ellipsoid_fit",
@@ -485,19 +500,19 @@ def literature_compare_periods(df_lit, provid):
     if have_lsm and have_fou:
         a, b = float(lsm), float(fourier)
         if _periods_agree(a, b):
-            found.append((a, "Literature, Lomb-Scargle and Fourier"))
+            found.append((a, "Literature (Greenstreet)"))
         else:
-            found.append((a, "Literature, Lomb-Scargle"))
-            found.append((b, "Literature, Fourier"))
-    elif have_lsm:
-        found.append((float(lsm), "Literature, Lomb-Scargle"))
-    elif have_fou:
-        found.append((float(fourier), "Literature, Fourier"))
+            found.append((a, "Literature (Greenstreet, Lomb-Scargle)"))
+            found.append((b, "Literature (Greenstreet, Fourier)"))
+    elif have_lsm or have_fou:
+        found.append(
+            (float(lsm if have_lsm else fourier), "Literature (Greenstreet)")
+        )
 
     if have_sbdb:
         p_sbdb = float(sbdb)
         if not any(_periods_agree(p_sbdb, p) for p, _ in found):
-            found.append((p_sbdb, "Literature, SBDB"))
+            found.append((p_sbdb, "Literature (SBDB)"))
 
     return found
 
@@ -554,6 +569,10 @@ def prepare_object(df_set, provid, designations):
     df_obj = df_obj.sort_values(["band", "obstime"]).reset_index(drop=True)
     t0 = df_obj["obstime"].iloc[0]
     df_obj["t_days"] = (df_obj["obstime"] - t0).dt.total_seconds() / 86400.0
+    # Absolute magnitudes already attached (e.g. db_mvroc_state via
+    # select_provid_mvroc_moi): skip the geometry table under code/data/.
+    if PROP in df_obj.columns and df_obj[PROP].notna().any():
+        return df_obj
     frames = [load_geometry(name) for name in _object_designations(df_obj, provid, designations)]
     frames = [frame for frame in frames if not frame.empty]
     if frames:
@@ -1324,11 +1343,11 @@ def plot_phase_allbands(
         return path
     t0 = fit["t_band"].min()
     if freq_sel is None:
-        freq_sel = fit["freq_sel"]
+    freq_sel = fit["freq_sel"]
     if per_sel is None:
-        per_sel = fit["per_sel"]
+    per_sel = fit["per_sel"]
     if source is None:
-        source = fit.get("period_source") or f"Periodogram {fit.get('band', BAND)}"
+    source = fit.get("period_source") or f"Periodogram {fit.get('band', BAND)}"
     present = [
         b for b in ALL_BANDS if b not in ("u", "Lu") and (df_obj["band"] == b).any()
     ]
@@ -1793,8 +1812,8 @@ COMPARE_PERIODS = (
     ("p_rot_ell_h_k", "ellipsoid_multiband", "Ellipsoid, multiband"),
 )
 LITERATURE_PERIODS = (
-    ("period_lsm_hr", "lsm", "Literature, Lomb-Scargle"),
-    ("period_fourier_hr", "fourier", "Literature, Fourier"),
+    ("period_lsm_hr", "lsm", "Literature (Greenstreet, Lomb-Scargle)"),
+    ("period_fourier_hr", "fourier", "Literature (Greenstreet, Fourier)"),
 )
 
 
@@ -2152,8 +2171,12 @@ def _plot_spheres_fit(provid, t, y, dy, t0, spheres, band=BAND, path=None):
     return save_figure(fig, path)
 
 
-def _draw_sphere_inset(ax, q_can, box=None, radii=True):
-    """Oblique view of the two fitted lobes, with radii in the ratio q."""
+def _draw_sphere_inset(ax, q_can, box=None, radii=True, phi_deg=None):
+    """Oblique view of the two fitted lobes, with radii in the ratio q.
+
+    When phi_deg is set (and radii is False), φ is drawn above the spheres and
+    q below them.
+    """
     alpha, beta = np.deg2rad(18), np.deg2rad(12)
     r1_s, r2_s = 1.0, q_can
     view = np.array([np.sin(alpha), np.cos(alpha) * np.cos(beta), np.sin(beta)])
@@ -2211,6 +2234,7 @@ def _draw_sphere_inset(ax, q_can, box=None, radii=True):
         placed.append((p, r, s["label"]))
     y_drop = 0.05 if radii else 0.08
     y_lab = min(p[1] - r for p, r, _ in placed) - y_drop
+    y_ceil_extra = 0.22
     if radii:
         for p, r, lab in placed:
             axins.text(p[0], y_lab, lab, ha="center", va="top", fontsize=8, color="0.1")
@@ -2226,8 +2250,9 @@ def _draw_sphere_inset(ax, q_can, box=None, radii=True):
         y_floor = y_lab - 0.85
         x_pad = 0.28
     else:
+        x_mid = float(np.mean([p[0] for p, _, _ in placed]))
         axins.text(
-            np.mean([p[0] for p, _, _ in placed]),
+            x_mid,
             y_lab - 0.28,
             rf"$q = {q_can:.2f}$",
             ha="center",
@@ -2237,10 +2262,23 @@ def _draw_sphere_inset(ax, q_can, box=None, radii=True):
         )
         y_floor = y_lab - 0.7
         x_pad = 0.22
+        y_ceil_extra = 0.18
+        if phi_deg is not None and np.isfinite(phi_deg):
+            y_top = max(p[1] + r for p, r, _ in placed) + 0.10
+            axins.text(
+                x_mid,
+                y_top,
+                rf"$\phi = {float(phi_deg):.0f}^\circ$",
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color="0.15",
+            )
+            y_ceil_extra = 0.42
     xs = np.concatenate([[p[0] - r, p[0] + r] for p, r, _ in placed])
     ys = np.concatenate([[p[1] - r, p[1] + r] for p, r, _ in placed])
     axins.set_xlim(xs.min() - x_pad, xs.max() + x_pad)
-    axins.set_ylim(y_floor, ys.max() + (0.22 if radii else 0.18))
+    axins.set_ylim(y_floor, ys.max() + (0.22 if radii else y_ceil_extra))
     axins.set_aspect("equal", adjustable="box")
 
 
@@ -2577,6 +2615,12 @@ def _figure_paths(kind, provid, analysis=None):
         return [FIG_DIR / f"{slug(provid)}_observations.csv"]
     if kind == "shape_fit":
         return [output_path("spheres", provid), output_path("ellipsoid", provid)]
+    if kind == "shape_fit_solution":
+        found = sorted(FIG_DIR.glob(f"{slug(provid)}_phase_shape_fit_sol*.webp"))
+        # Empty glob would make all([]) True and skip without figures.
+        return found if found else [
+            FIG_DIR / f"{slug(provid)}_phase_shape_fit_solMISSING.webp"
+        ]
     if kind == "multiband_photometry":
         return [
             # output_path("multiband_lightcurve", provid),
@@ -3023,7 +3067,105 @@ def _leave_one_night_out_peak(df_obj, band, freq_ref, tol=0.1):
     }
 
 
-def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
+# ---------------------------------------------------------------------------
+# BEGIN REMOVABLE: campaign-alias keep selrule (literature window-alias study)
+# Toggle off or delete this block + the use_selrule branch in
+# multiband_photometry_compare / nightalias / compare_literature when done.
+# Keep a campaign alias when power and the chi2 gap to the non-alias fallback
+# clear the floors; if several aliases pass, adopt the one with largest A/s.
+# ---------------------------------------------------------------------------
+ALIAS_KEEP_SELRULE_POWER_MIN = 0.6
+ALIAS_KEEP_SELRULE_CHI2_RATIO_MIN = 2.0
+LITERATURE_SELRULE_LIST = (
+    ROOT / "figures/figures_literature/literature_matches_window_alias.csv"
+)
+
+
+def campaign_alias_keep_selrule(alias_item, fallback_item=None):
+    """Decide whether a campaign alias clears the keep-rule floors.
+
+    Removable experimental rule. Returns ``(keep, reason)``. A/s is not a
+    hard gate here; ``campaign_alias_pick_selrule`` uses it to rank keepers.
+    """
+    power = float(alias_item.get("power", np.nan))
+    amp_ratio = float(alias_item.get("amp_ratio", np.nan))
+    chi2_alias = float(alias_item.get("chi2_nu", np.nan))
+    if not np.isfinite(power) or power < ALIAS_KEEP_SELRULE_POWER_MIN:
+        return (
+            False,
+            f"reject: power = {power:.3f} < {ALIAS_KEEP_SELRULE_POWER_MIN}",
+        )
+    if fallback_item is None:
+        return (
+            True,
+            f"keep: power = {power:.3f}, A/s = {amp_ratio:.2f}, "
+            f"chi2_nu = {chi2_alias:.2f}, no non-alias fallback",
+        )
+    chi2_fb = float(fallback_item.get("chi2_nu", np.nan))
+    if not np.isfinite(chi2_alias) or chi2_alias <= 0 or not np.isfinite(chi2_fb):
+        return False, "reject: chi2_nu missing for alias or fallback"
+    ratio = chi2_fb / chi2_alias
+    if ratio < ALIAS_KEEP_SELRULE_CHI2_RATIO_MIN:
+        return (
+            False,
+            f"reject: chi2_fallback/chi2_alias = {ratio:.2f} "
+            f"< {ALIAS_KEEP_SELRULE_CHI2_RATIO_MIN}",
+        )
+    return (
+        True,
+        f"keep: power = {power:.3f}, A/s = {amp_ratio:.2f}, "
+        f"chi2_nu = {chi2_alias:.2f}, "
+        f"chi2_fallback/chi2_alias = {ratio:.2f}",
+    )
+
+
+def campaign_alias_pick_selrule(alias_items, fallback_item=None):
+    """Among two-peak aliases that pass the keep-rule, pick largest A/s.
+
+    Returns ``(chosen_item_or_None, reason, n_tested, n_kept)``.
+    """
+    keepers = []
+    for item in alias_items:
+        keep, reason = campaign_alias_keep_selrule(item, fallback_item)
+        p_rot = float(item.get("p_rot_h", np.nan))
+        print(
+            f"    selrule at {p_rot:.4f} h: {reason}"
+        )
+        if keep:
+            keepers.append(item)
+    n_tested = len(alias_items)
+    n_kept = len(keepers)
+    if not keepers:
+        return (
+            None,
+            f"reject: no alias passed selrule ({n_tested} tested)",
+            n_tested,
+            0,
+        )
+    chosen = max(
+        keepers,
+        key=lambda item: (
+            float(item.get("amp_ratio", np.nan))
+            if np.isfinite(float(item.get("amp_ratio", np.nan)))
+            else -np.inf
+        ),
+    )
+    amp = float(chosen.get("amp_ratio", np.nan))
+    return (
+        chosen,
+        f"keep: max A/s = {amp:.2f} among {n_kept} of {n_tested} aliases",
+        n_tested,
+        n_kept,
+    )
+
+
+# END REMOVABLE: campaign-alias keep selrule
+# ---------------------------------------------------------------------------
+
+
+def multiband_photometry_compare(
+    df_obj, provid, candidates, nightalias=False, use_selrule=False
+):
     """Fit a two-peak multiband model at each voted period and keep the best.
 
     Candidates are the periods from the democratic vote. Each is compared with
@@ -3041,6 +3183,10 @@ def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
     stable when at least half of the folds keep it; that period is then kept
     with its alias label. An unstable peak falls back to the best non-alias
     two-peak model, or leaves the asteroid out.
+
+    When use_selrule is True (removable literature experiment), every
+    two-peak campaign alias is tested with campaign_alias_keep_selrule; if
+    any pass, the one with largest A/s is kept without leave-one-night-out.
     """
     tag = "nightalias" if nightalias else "compare"
     figure_kind = (
@@ -3051,6 +3197,7 @@ def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
     alias = {"Lg": "g", "Lr": "r", "Li": "i", "Lz": "z", "Ly": "y", "Lu": "u"}
     filt_order = ["g", "r", "i", "z", "y"]
     ref = "r"
+    n_obs_total = int(len(df_obj))
     df_fit = df_obj.dropna(subset=[PROP, "band"]).copy()
     df_fit["filt"] = df_fit["band"].map(lambda b: alias.get(b, b))
     rms = pd.to_numeric(df_fit["rmsmag"], errors="coerce").to_numpy(float)
@@ -3165,49 +3312,77 @@ def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
     nightalias_n_kept = 0
     nightalias_n_tested = 0
     nightalias_periods = ""
+    # REMOVABLE selrule bookkeeping
+    selrule_tested = 0
+    selrule_kept = 0
+    selrule_reason = ""
+    kept_by_selrule = False
     best = None
     if nightalias and two_peaks and two_peaks[0]["span_alias"]:
         candidate = two_peaks[0]
-        band_lono = _band_producing_period(df_obj, candidate["labels"])
-        lono = _leave_one_night_out_peak(df_obj, band_lono, candidate["freq"])
-        nightalias_tested = 1
-        nightalias_stable = int(lono["stable"])
-        nightalias_band = str(lono.get("band") or "")
-        nightalias_n_nights = int(lono["n_nights"])
-        nightalias_n_kept = int(lono["n_kept"])
-        nightalias_n_tested = int(lono["n_tested"])
-        nightalias_periods = ",".join(
-            f"{fold['p_rot_h']:.4f}:{fold['power']:.3f}"
-            for fold in lono.get("folds", [])
-        )
-        print(
-            f"  multiband 2-peak {tag}: leave-one-night-out on {nightalias_band} "
-            f"at {candidate['p_rot_h']:.4f} h: {lono['reason']}"
-        )
-        for fold in lono.get("folds", []):
-            mark = " kept" if fold["kept"] else ""
+        fallback = rotations[0] if rotations else None
+        # REMOVABLE: try metric keep-rule before leave-one-night-out
+        if use_selrule:
+            alias_items = [item for item in two_peaks if item["span_alias"]]
             print(
-                f"    leave out {fold['night']}: P_rot = {fold['p_rot_h']:.4f} h, "
-                f"power = {fold['power']:.3f} (N = {fold['n_points']}){mark}"
+                f"  multiband 2-peak {tag}: alias keep selrule on "
+                f"{len(alias_items)} two-peak campaign alias(es)"
             )
-        if lono["stable"]:
-            best = candidate
+            chosen, selrule_reason, selrule_tested, selrule_kept = (
+                campaign_alias_pick_selrule(alias_items, fallback)
+            )
             print(
-                f"  multiband 2-peak {tag}: campaign alias kept after "
-                f"leave-one-night-out ({candidate['p_rot_h']:.4f} h)"
+                f"  multiband 2-peak {tag}: alias keep selrule: {selrule_reason}"
             )
-        else:
-            best = rotations[0] if rotations else None
-            if best is None:
+            if chosen is not None:
+                best = chosen
+                kept_by_selrule = True
                 print(
-                    f"  multiband 2-peak {tag}: campaign alias rejected by "
-                    f"leave-one-night-out; {provid} is left out"
+                    f"  multiband 2-peak {tag}: campaign alias kept by "
+                    f"selrule ({chosen['p_rot_h']:.4f} h, "
+                    f"A/s = {chosen['amp_ratio']:.2f})"
+                )
+        if best is None:
+            band_lono = _band_producing_period(df_obj, candidate["labels"])
+            lono = _leave_one_night_out_peak(df_obj, band_lono, candidate["freq"])
+            nightalias_tested = 1
+            nightalias_stable = int(lono["stable"])
+            nightalias_band = str(lono.get("band") or "")
+            nightalias_n_nights = int(lono["n_nights"])
+            nightalias_n_kept = int(lono["n_kept"])
+            nightalias_n_tested = int(lono["n_tested"])
+            nightalias_periods = ",".join(
+                f"{fold['p_rot_h']:.4f}:{fold['power']:.3f}"
+                for fold in lono.get("folds", [])
+            )
+            print(
+                f"  multiband 2-peak {tag}: leave-one-night-out on {nightalias_band} "
+                f"at {candidate['p_rot_h']:.4f} h: {lono['reason']}"
+            )
+            for fold in lono.get("folds", []):
+                mark = " kept" if fold["kept"] else ""
+                print(
+                    f"    leave out {fold['night']}: P_rot = {fold['p_rot_h']:.4f} h, "
+                    f"power = {fold['power']:.3f} (N = {fold['n_points']}){mark}"
+                )
+            if lono["stable"]:
+                best = candidate
+                print(
+                    f"  multiband 2-peak {tag}: campaign alias kept after "
+                    f"leave-one-night-out ({candidate['p_rot_h']:.4f} h)"
                 )
             else:
-                print(
-                    f"  multiband 2-peak {tag}: campaign alias rejected by "
-                    f"leave-one-night-out; falling back to {best['p_rot_h']:.4f} h"
-                )
+                best = fallback
+                if best is None:
+                    print(
+                        f"  multiband 2-peak {tag}: campaign alias rejected by "
+                        f"leave-one-night-out; {provid} is left out"
+                    )
+                else:
+                    print(
+                        f"  multiband 2-peak {tag}: campaign alias rejected by "
+                        f"leave-one-night-out; falling back to {best['p_rot_h']:.4f} h"
+                    )
     else:
         best = rotations[0] if rotations else None
     periods = ",".join(
@@ -3259,6 +3434,9 @@ def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
             "nightalias_n_tested": nightalias_n_tested,
             "nightalias_n_kept": nightalias_n_kept,
             "nightalias_periods": nightalias_periods,
+            "selrule_tested": selrule_tested,
+            "selrule_kept": selrule_kept,
+            "selrule_reason": selrule_reason,
         }
     n_rot_label = len(rotations) if not best["span_alias"] else len(two_peaks)
     # Adopted a non-alias while a lower-chi2 two-peak campaign alias was rejected
@@ -3276,6 +3454,8 @@ def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
         f"A/s = {best['amp_ratio']:.3f}, peaks = 2 "
         f"(best of {n_rot_label} rotations, {len(scored)} scored)"
     )
+    if selrule_tested:
+        summary += f", selrule_kept = {selrule_kept}"
     if nightalias_tested:
         summary += (
             f", leave-one-night-out stable = {nightalias_stable} "
@@ -3344,7 +3524,11 @@ def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
                     label="data 2.5–97.5%",
                 )
                 ax.axhline(faint, color="0.25", ls=":", lw=1.2)
-        if selected and item["span_alias"] and nightalias_stable:
+        if selected and item["span_alias"] and kept_by_selrule:
+            # REMOVABLE selrule title mark
+            mark = ", selected, alias keep selrule"
+            title_color = "blue"
+        elif selected and item["span_alias"] and nightalias_stable:
             mark = ", selected, leave-one-night-out"
             title_color = "blue"
         elif selected:
@@ -3356,6 +3540,7 @@ def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
         show_remnant = bool(selected and alias_remnant)
         ax.set_title(
             rf"$P_{{rot}}$ = {item['p_rot_h']:.2f} h, "
+            rf"$N$ = {n_obs_total}, "
             rf"$\chi^2_\nu$ = {item['chi2_nu']:.1f}, "
             f"{item['n_peaks']} peaks{mark}\n"
             rf"power = {item['power']:.3f}, "
@@ -3461,13 +3646,20 @@ def multiband_photometry_compare(df_obj, provid, candidates, nightalias=False):
         "nightalias_n_tested": nightalias_n_tested,
         "nightalias_n_kept": nightalias_n_kept,
         "nightalias_periods": nightalias_periods,
+        "selrule_tested": selrule_tested,
+        "selrule_kept": selrule_kept,
+        "selrule_reason": selrule_reason,
     }
 
 
-def multiband_photometry_nightalias(df_obj, provid, candidates):
-    """Two-peak compare with leave-one-night-out for campaign aliases."""
+def multiband_photometry_nightalias(df_obj, provid, candidates, use_selrule=False):
+    """Two-peak compare with leave-one-night-out for campaign aliases.
+
+    When use_selrule is True, aliases that pass the keep-rule may be kept
+    (largest A/s wins) before leave-one-night-out runs (removable experiment).
+    """
     return multiband_photometry_compare(
-        df_obj, provid, candidates, nightalias=True
+        df_obj, provid, candidates, nightalias=True, use_selrule=use_selrule
     )
 
 
@@ -3665,18 +3857,31 @@ def _draw_multiband_twopeak_panel(ax, frame, item, selected, title_extra=""):
         ax.tick_params(labelsize=10)
 
 
-def multiband_photometry_compare_literature(df_obj, provid, candidates, df_lit):
+def multiband_photometry_compare_literature(
+    df_obj, provid, candidates, df_lit, use_selrule=False
+):
     """Same as multiband_photometry_compare, plus literature main panel(s).
 
     Layout: algorithm period (full width), one full-width panel per distinct
     literature period (LSM, Fourier, and/or SBDB), then the other voted
     two-peak periods in a two-column grid below.
+
+    When use_selrule is True (removable literature experiment), every
+    two-peak campaign alias is tested with the keep-rule; if any pass, the
+    one with largest A/s is kept, else leave-one-night-out on the best-chi2
+    alias, else the best non-alias two-peak. Missing literature periods skip
+    the literature panel(s) instead of aborting.
     """
     lit_periods = literature_compare_periods(df_lit, provid)
-    if not lit_periods:
+    if not lit_periods and not use_selrule:
         print(f"  skip multiband_photometry_compare_literature for {provid}: "
               "no literature rotation period")
         return None
+    if not lit_periods and use_selrule:
+        print(
+            f"  multiband 2-peak literature: no published P_rot for {provid}; "
+            "drawing algorithm panel only"
+        )
 
     frame = _prepare_multiband_twopeak_frame(df_obj, tag="literature")
     if frame is None:
@@ -3701,7 +3906,86 @@ def multiband_photometry_compare_literature(df_obj, provid, candidates, df_lit):
     scored.sort(key=lambda item: (item["chi2_nu"], item["p_rot_h"]))
     two_peaks = [item for item in scored if item["n_peaks"] == 2]
     rotations = [item for item in two_peaks if not item["span_alias"]]
-    best = rotations[0] if rotations else None
+    # REMOVABLE selrule / nightalias bookkeeping
+    selrule_tested = 0
+    selrule_kept = 0
+    selrule_reason = ""
+    nightalias_tested = 0
+    nightalias_stable = 0
+    nightalias_band = ""
+    nightalias_n_nights = 0
+    nightalias_n_kept = 0
+    nightalias_n_tested = 0
+    nightalias_periods = ""
+    best = None
+    if use_selrule and two_peaks and two_peaks[0]["span_alias"]:
+        candidate = two_peaks[0]
+        fallback = rotations[0] if rotations else None
+        alias_items = [item for item in two_peaks if item["span_alias"]]
+        print(
+            f"  multiband 2-peak literature: alias keep selrule on "
+            f"{len(alias_items)} two-peak campaign alias(es)"
+        )
+        chosen, selrule_reason, selrule_tested, selrule_kept = (
+            campaign_alias_pick_selrule(alias_items, fallback)
+        )
+        print(
+            f"  multiband 2-peak literature: alias keep selrule: "
+            f"{selrule_reason}"
+        )
+        if chosen is not None:
+            best = chosen
+            print(
+                f"  multiband 2-peak literature: campaign alias kept by "
+                f"selrule ({chosen['p_rot_h']:.4f} h, "
+                f"A/s = {chosen['amp_ratio']:.2f})"
+            )
+        else:
+            band_lono = _band_producing_period(df_obj, candidate["labels"])
+            lono = _leave_one_night_out_peak(df_obj, band_lono, candidate["freq"])
+            nightalias_tested = 1
+            nightalias_stable = int(lono["stable"])
+            nightalias_band = str(lono.get("band") or "")
+            nightalias_n_nights = int(lono["n_nights"])
+            nightalias_n_kept = int(lono["n_kept"])
+            nightalias_n_tested = int(lono["n_tested"])
+            nightalias_periods = ",".join(
+                f"{fold['p_rot_h']:.4f}:{fold['power']:.3f}"
+                for fold in lono.get("folds", [])
+            )
+            print(
+                f"  multiband 2-peak literature: leave-one-night-out on "
+                f"{nightalias_band} at {candidate['p_rot_h']:.4f} h: "
+                f"{lono['reason']}"
+            )
+            for fold in lono.get("folds", []):
+                mark = " kept" if fold["kept"] else ""
+                print(
+                    f"    leave out {fold['night']}: P_rot = "
+                    f"{fold['p_rot_h']:.4f} h, power = {fold['power']:.3f} "
+                    f"(N = {fold['n_points']}){mark}"
+                )
+            if lono["stable"]:
+                best = candidate
+                print(
+                    f"  multiband 2-peak literature: campaign alias kept after "
+                    f"leave-one-night-out ({candidate['p_rot_h']:.4f} h)"
+                )
+            else:
+                best = fallback
+                if best is None:
+                    print(
+                        f"  multiband 2-peak literature: campaign alias "
+                        f"rejected by leave-one-night-out; {provid} is left out"
+                    )
+                else:
+                    print(
+                        f"  multiband 2-peak literature: campaign alias "
+                        f"rejected by leave-one-night-out; falling back to "
+                        f"{best['p_rot_h']:.4f} h"
+                    )
+    else:
+        best = rotations[0] if rotations else None
 
     for item in scored:
         mark = " selected" if item is best else ""
@@ -3715,14 +3999,17 @@ def multiband_photometry_compare_literature(df_obj, provid, candidates, df_lit):
         print(_red(line) if item["span_alias"] else line)
 
     path = output_path("multiband_photometry_compare_literature", provid)
-    p_lit_h0, lit_label0 = lit_periods[0]
     if best is None:
         if path.exists():
             path.unlink()
         reason = (
-            "Only campaign aliases have two peaks"
-            if two_peaks
-            else "No two-peak period in the multiband comparison"
+            "Campaign alias failed leave-one-night-out"
+            if use_selrule and two_peaks and nightalias_tested and not nightalias_stable
+            else (
+                "Only campaign aliases have two peaks"
+                if two_peaks
+                else "No two-peak period in the multiband comparison"
+            )
         )
         print(
             f"  multiband 2-peak literature: {reason}; {provid} is left out"
@@ -3731,8 +4018,18 @@ def multiband_photometry_compare_literature(df_obj, provid, candidates, df_lit):
             "no_two_peaks": True,
             "reject_reason": reason,
             "path": None,
-            "p_rot_lit_h": float(p_lit_h0),
-            "lit_label": lit_label0,
+            "p_rot_lit_h": np.nan,
+            "lit_label": "",
+            "nightalias_tested": nightalias_tested,
+            "nightalias_stable": nightalias_stable,
+            "nightalias_band": nightalias_band,
+            "nightalias_n_nights": nightalias_n_nights,
+            "nightalias_n_tested": nightalias_n_tested,
+            "nightalias_n_kept": nightalias_n_kept,
+            "nightalias_periods": nightalias_periods,
+            "selrule_tested": selrule_tested,
+            "selrule_kept": selrule_kept,
+            "selrule_reason": selrule_reason,
         }
 
     lit_items = []
@@ -3746,6 +4043,11 @@ def multiband_photometry_compare_literature(df_obj, provid, candidates, df_lit):
             f"  multiband 2-peak literature: algorithm P_rot = {best['p_rot_h']:.4f} h, "
             f"literature P_rot = {lit_item['p_rot_h']:.4f} h ({lit_label}), "
             f"chi2_nu_lit = {lit_item['chi2_nu']:.2f}, peaks_lit = {lit_item['n_peaks']}"
+        )
+    if not lit_items:
+        print(
+            f"  multiband 2-peak literature: algorithm P_rot = {best['p_rot_h']:.4f} h "
+            f"(no literature period to compare)"
         )
 
     def voted(item):
@@ -3817,7 +4119,8 @@ def multiband_photometry_compare_literature(df_obj, provid, candidates, df_lit):
     for ax in lit_axes:
         ax.set_ylabel("Absolute magnitude, H")
     if n_other == 0:
-        lit_axes[-1].set_xlabel("Phase at the rotation period ($2P$)")
+        bottom_ax = lit_axes[-1] if lit_axes else ax_alg
+        bottom_ax.set_xlabel("Phase at the rotation period ($2P$)")
     else:
         bottom = {}
         for i, ax in enumerate(other_axes):
@@ -3828,10 +4131,16 @@ def multiband_photometry_compare_literature(df_obj, provid, candidates, df_lit):
                 ax.tick_params(labelleft=False)
         for ax in bottom.values():
             ax.set_xlabel("Phase at the rotation period ($2P$)")
-    fig.suptitle(
-        f"Multiband 2-peak algorithm vs literature of {provid} ({PROP})",
-        fontsize=12,
-    )
+    if lit_items:
+        fig.suptitle(
+            f"Multiband 2-peak algorithm vs literature of {provid} ({PROP})",
+            fontsize=12,
+        )
+    else:
+        fig.suptitle(
+            f"Multiband 2-peak algorithm of {provid} ({PROP})",
+            fontsize=12,
+        )
     save_figure(fig, path)
     colors = _compare_colors(df_obj, best, frame["present"], frame["ref"])
     if colors:
@@ -3841,13 +4150,35 @@ def multiband_photometry_compare_literature(df_obj, provid, candidates, df_lit):
             if key in colors
         )
         print(f"  colors of the adopted period: {shown}")
-    first_lit = lit_items[0]
-    periods_lit = ",".join(
-        f"{item['lit_label']}:{item['p_rot_h']:.4f}:{item['chi2_nu']:.2f}:"
-        f"{item['n_peaks']}:{item['power']:.3f}:{item['amp_ratio']:.3f}:"
-        f"{item['span_alias']}"
-        for item in lit_items
-    )
+    if lit_items:
+        first_lit = lit_items[0]
+        periods_lit = ",".join(
+            f"{item['lit_label']}:{item['p_rot_h']:.4f}:{item['chi2_nu']:.2f}:"
+            f"{item['n_peaks']}:{item['power']:.3f}:{item['amp_ratio']:.3f}:"
+            f"{item['span_alias']}"
+            for item in lit_items
+        )
+        lit_fields = {
+            "p_rot_lit_h": float(first_lit["p_rot_h"]),
+            "chi2_nu_lit": float(first_lit["chi2_nu"]),
+            "n_peaks_lit": int(first_lit["n_peaks"]),
+            "power_lit": float(first_lit["power"]),
+            "amp_ratio_lit": float(first_lit["amp_ratio"]),
+            "span_alias_lit": int(first_lit["span_alias"]),
+            "lit_label": first_lit["lit_label"],
+            "periods_lit": periods_lit,
+        }
+    else:
+        lit_fields = {
+            "p_rot_lit_h": np.nan,
+            "chi2_nu_lit": np.nan,
+            "n_peaks_lit": np.nan,
+            "power_lit": np.nan,
+            "amp_ratio_lit": np.nan,
+            "span_alias_lit": np.nan,
+            "lit_label": "",
+            "periods_lit": "",
+        }
     return {
         "p_rot_h": float(best["p_rot_h"]),
         "chi2_nu": float(best["chi2_nu"]),
@@ -3856,18 +4187,504 @@ def multiband_photometry_compare_literature(df_obj, provid, candidates, df_lit):
         "amp_ratio": float(best["amp_ratio"]),
         "amp_data": _data_amplitude(best["y_on_ref"])[0],
         "span_alias": int(best["span_alias"]),
-        "p_rot_lit_h": float(first_lit["p_rot_h"]),
-        "chi2_nu_lit": float(first_lit["chi2_nu"]),
-        "n_peaks_lit": int(first_lit["n_peaks"]),
-        "power_lit": float(first_lit["power"]),
-        "amp_ratio_lit": float(first_lit["amp_ratio"]),
-        "span_alias_lit": int(first_lit["span_alias"]),
-        "lit_label": first_lit["lit_label"],
-        "periods_lit": periods_lit,
+        **lit_fields,
         "colors": colors,
         "path": path,
         "no_two_peaks": False,
+        "nightalias_tested": nightalias_tested,
+        "nightalias_stable": nightalias_stable,
+        "nightalias_band": nightalias_band,
+        "nightalias_n_nights": nightalias_n_nights,
+        "nightalias_n_tested": nightalias_n_tested,
+        "nightalias_n_kept": nightalias_n_kept,
+        "nightalias_periods": nightalias_periods,
+        "selrule_tested": selrule_tested,
+        "selrule_kept": selrule_kept,
+        "selrule_reason": selrule_reason,
     }
+
+
+def _campaign_alias_for_period(p_rot_h, t_days, tol=0.1):
+    """Return (is_alias, label) if P_rot lands on a campaign-duration alias."""
+    freq = 48.0 / float(p_rot_h)
+    for alias_freq, label in _baseline_alias_items(t_days):
+        if abs(freq - float(alias_freq)) <= tol:
+            return True, str(label)
+    return False, ""
+
+
+def load_moi_solutions(path=None):
+    """Read figures_MOI/solutions.csv → DataFrame with provid, solutions, periods."""
+    path = Path(path) if path is not None else MOI_SOLUTIONS
+    if not path.exists():
+        raise SystemExit(f"Missing MOI solutions list: {path}")
+    table = pd.read_csv(path)
+    table["provid"] = table["provid"].astype(str).str.strip()
+    return table
+
+
+def _moi_solution_periods(solutions_row):
+    """Expand one solutions.csv row into [(sol_id, p_rot_h), ...]."""
+    ids = [
+        part.strip()
+        for part in str(solutions_row["solutions"]).split("/")
+        if part.strip()
+    ]
+    periods = [
+        float(part)
+        for part in str(solutions_row["periods_h"]).split("/")
+        if part.strip()
+    ]
+    if len(ids) != len(periods):
+        raise ValueError(
+            f"solutions/periods length mismatch for {solutions_row.get('provid')}: "
+            f"{ids} vs {periods}"
+        )
+    return list(zip(ids, periods))
+
+
+def folding_solution(df_obj, provid, df_lit, solutions_row):
+    """Vertical stack of harmonic folds for the MOI-selected periods.
+
+    Each MVROC solution from solutions.csv gets one panel. Published literature
+    periods for the same object, when available, are drawn afterwards even if
+    they nearly match an MVROC period. The results CSV stores one row per drawn
+    panel.
+    """
+    specs = []
+    for sol_id, p_rot_h in _moi_solution_periods(solutions_row):
+        specs.append(
+            {
+                "solution": str(sol_id),
+                "solution_kind": "mvroc",
+                "p_rot_h": float(p_rot_h),
+                "label": f"MVROC solution {sol_id}",
+            }
+        )
+
+    for p_lit_h, lit_label in literature_compare_periods(df_lit, provid):
+        specs.append(
+            {
+                "solution": f"lit:{lit_label}",
+                "solution_kind": "literature",
+                "p_rot_h": float(p_lit_h),
+                "label": lit_label,
+            }
+        )
+    if not specs:
+        print(f"  skip folding_solution for {provid}: no periods to fold")
+        return None
+
+    frame = _prepare_multiband_twopeak_frame(df_obj, tag="folding_solution")
+    if frame is None:
+        print(
+            f"  skip folding_solution for {provid}: fewer than 2 filters"
+        )
+        return None
+
+    present = frame["present"]
+    f_fit = frame["f_fit"]
+    filter_counts = {filt: int((f_fit == filt).sum()) for filt in present}
+    filters_text = ", ".join(
+        f"{filt} (N={filter_counts[filt]})" for filt in present
+    )
+
+    panels = []
+    for spec in specs:
+        p_rot_h = float(spec["p_rot_h"])
+        freq = 48.0 / p_rot_h
+        is_alias, alias_label = _campaign_alias_for_period(p_rot_h, frame["t_fit"])
+        labels = [spec["label"]]
+        if is_alias and alias_label:
+            labels.append(alias_label)
+        item = _score_twopeak_frequency(frame, freq, labels)
+        item["span_alias"] = int(is_alias)
+        item["alias_label"] = alias_label if is_alias else ""
+        item["solution"] = spec["solution"]
+        item["solution_kind"] = spec["solution_kind"]
+        item["label"] = spec["label"]
+        item["p_rot_h"] = p_rot_h  # keep the requested period, not 48/freq float drift
+        colors = _compare_colors(df_obj, item, present, frame["ref"])
+        item["colors"] = colors
+        panels.append(item)
+        alias_mark = f", campaign alias ({alias_label})" if is_alias else ""
+        print(
+            f"  folding_solution {spec['solution']}: P_rot = {p_rot_h:.6f} h, "
+            f"chi2_nu = {item['chi2_nu']:.2f}, A = {item['amp']:.3f}, "
+            f"A/s = {item['amp_ratio']:.2f}{alias_mark}"
+        )
+
+    n_panel = len(panels)
+    fig, axes = plt.subplots(
+        n_panel,
+        1,
+        figsize=(10.5, 4.4 * n_panel),
+        squeeze=False,
+        sharex=True,
+    )
+    photometry = np.concatenate(
+        [np.asarray(item["y_on_ref"], dtype=float) for item in panels]
+    )
+    photometry = photometry[np.isfinite(photometry)]
+    bright = float(np.min(photometry))
+    faint = float(np.max(photometry))
+    span = max(faint - bright, 0.05)
+    pad = max(0.05, 0.15 * span)
+    y_lo, y_hi = faint + pad, bright - pad
+
+    for ax, item in zip(axes.ravel(), panels):
+        _draw_multiband_twopeak_panel(ax, frame, item, selected=True, title_extra="")
+        color_bits = []
+        for key in (f"{a}-{b}" for a, b in _color_pairs()):
+            if key in item["colors"] and f"{key}_err" in item["colors"]:
+                color_bits.append(
+                    rf"${key}$ = ${item['colors'][key]:+.3f}"
+                    rf" \pm {item['colors'][key + '_err']:.3f}$"
+                )
+        color_line = "; ".join(color_bits[:4])
+        alias_txt = (
+            f", campaign alias ({item['alias_label']})"
+            if item["span_alias"]
+            else ""
+        )
+        kind_txt = (
+            item["label"]
+            if item["solution_kind"] == "literature"
+            else f"MVROC sol. {item['solution']}"
+        )
+        if item["span_alias"]:
+            title_color = "red"
+        elif item["solution_kind"] == "literature":
+            title_color = "blue"
+        else:
+            title_color = "black"
+        ax.set_title(
+            rf"{kind_txt}: {filters_text}"
+            "\n"
+            rf"$P_{{\mathrm{{rot}}}}$ = {item['p_rot_h']:.4f} h, "
+            rf"$\chi^{{2}}_{{\nu}}$ = {item['chi2_nu']:.2f}, "
+            rf"$A$ = {item['amp']:.3f}, $A/s$ = {item['amp_ratio']:.2f}"
+            f"{alias_txt}"
+            + (f"\n{color_line}" if color_line else ""),
+            fontsize=10,
+            color=title_color,
+        )
+        ax.set_ylim(y_lo, y_hi)
+        ax.set_ylabel("Absolute magnitude, H")
+        ax.legend(loc="best", frameon=True, fontsize=7)
+
+    axes.ravel()[-1].set_xlabel("Phase at the rotation period ($2P$)")
+    fig.suptitle(f"Folding solutions of {provid} ({PROP})", fontsize=12)
+    fig.tight_layout()
+    path = output_path("folding_solution", provid)
+    save_figure(fig, path)
+
+    rows = []
+    for item in panels:
+        row = {
+            "solution": item["solution"],
+            "solution_kind": item["solution_kind"],
+            "solution_label": item["label"],
+            "p_rot_h": float(item["p_rot_h"]),
+            "chi2_nu": float(item["chi2_nu"]),
+            "n_peaks": int(item["n_peaks"]),
+            "power": float(item["power"]),
+            "amp": float(item["amp"]),
+            "amp_ratio": float(item["amp_ratio"]),
+            "amp_data": _data_amplitude(item["y_on_ref"])[0],
+            "scatter": float(item["scatter"]),
+            "span_alias": int(item["span_alias"]),
+            "alias_label": item["alias_label"],
+            "filters": ",".join(present),
+            "n_filters": len(present),
+            "ref_filter": frame["ref"],
+        }
+        for filt, n_pts in filter_counts.items():
+            row[f"n_obs_{filt}"] = int(n_pts)
+        row.update(item["colors"])
+        rows.append(row)
+
+    return {"path": path, "solutions": rows, "n_solutions": len(rows)}
+
+
+def shape_fit_solution_path(provid, solution_id):
+    """One WebP per MVROC solution: <provid>_phase_shape_fit_sol<N>.webp."""
+    return FIG_DIR / f"{slug(provid)}_phase_shape_fit_sol{solution_id}.webp"
+
+
+def _plot_shape_fit_solution(
+    provid,
+    solution_id,
+    p_rot_h,
+    t,
+    y,
+    dy,
+    f_fit,
+    present,
+    ref,
+    t0,
+    freq0,
+    spheres,
+    ellipsoid,
+    path=None,
+):
+    """Notebook-style shape fit: fold + residuals + drawings beside residuals."""
+    if path is None:
+        path = shape_fit_solution_path(provid, solution_id)
+    fig = plt.figure(figsize=(11.5, 9.2))
+    gs = fig.add_gridspec(
+        3,
+        2,
+        height_ratios=[3.2, 1.15, 1.15],
+        width_ratios=[4.0, 1.15],
+        hspace=0.12,
+        wspace=0.08,
+    )
+    ax = fig.add_subplot(gs[0, 0])
+    ax_sph = fig.add_subplot(gs[1, 0], sharex=ax)
+    ax_ell = fig.add_subplot(gs[2, 0], sharex=ax)
+    ax_sph_draw = fig.add_subplot(gs[1, 1])
+    ax_ell_draw = fig.add_subplot(gs[2, 1])
+
+    ph_show = _rotational_phase(t, t0, freq0)
+    ph_grid = spheres["ph_grid"]
+    t_show = t0 + ph_grid * 2.0 / freq0
+    m_sph_show = touching_spheres_mag(
+        _rotational_phase(t_show, t0, spheres["freq"]),
+        spheres["m_sep"],
+        spheres["q_fit"],
+        spheres["cos2phi"],
+        spheres["theta0"],
+    )
+    m_ell_show = ellipsoid_mag(
+        _rotational_phase(t_show, t0, ellipsoid["freq"]),
+        ellipsoid["m_ab"],
+        ellipsoid["b_over_a"],
+        1.0,
+        0.0,
+        ellipsoid["theta0"],
+    )
+
+    for filt in present:
+        sel = f_fit == filt
+        if not np.any(sel):
+            continue
+        ax.errorbar(
+            ph_show[sel],
+            y[sel],
+            yerr=dy[sel],
+            fmt="o",
+            ms=4,
+            alpha=0.75,
+            color=band_colors.get(f"L{filt}", "k"),
+            ecolor="0.75",
+            label=f"L{filt}",
+            zorder=3,
+        )
+    ax.plot(
+        ph_grid,
+        m_sph_show,
+        "k",
+        lw=2.2,
+        label=rf"Contact: $\Delta m={spheres['amp_sph']:.2f}$",
+    )
+    ax.plot(
+        ph_grid,
+        m_ell_show,
+        color="C3",
+        lw=2.0,
+        label=rf"Ellipsoid: $\Delta m={ellipsoid['amp_ell']:.2f}$",
+    )
+    ax.set_ylabel(r"$H$ (color-corrected)")
+    ax.invert_yaxis()
+    ax.grid(True, alpha=0.3)
+    ax.legend(
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        frameon=True,
+        fontsize=7,
+        borderaxespad=0.0,
+        handlelength=1.4,
+        labelspacing=0.35,
+        borderpad=0.35,
+    )
+    ax.set_title(
+        f"Shape fits to {provid} (on ${ref}$), "
+        rf"$P_{{\mathrm{{rot}}}}$ = {p_rot_h:.6f} h (sol. {solution_id})"
+    )
+    plt.setp(ax.get_xticklabels(), visible=False)
+
+    ph_sph = _rotational_phase(t, t0, spheres["freq"])
+    res_sph = y - touching_spheres_mag(
+        ph_sph,
+        spheres["m_sep"],
+        spheres["q_fit"],
+        spheres["cos2phi"],
+        spheres["theta0"],
+    )
+    for filt in present:
+        sel = f_fit == filt
+        if not np.any(sel):
+            continue
+        ax_sph.errorbar(
+            ph_show[sel],
+            res_sph[sel],
+            yerr=dy[sel],
+            fmt="o",
+            ms=3,
+            alpha=0.75,
+            color=band_colors.get(f"L{filt}", "k"),
+            ecolor="0.75",
+        )
+    ax_sph.axhline(0, color="k", lw=1)
+    ax_sph.set_ylabel("Data $-$ spheres")
+    ax_sph.invert_yaxis()
+    ax_sph.grid(True, alpha=0.3)
+    plt.setp(ax_sph.get_xticklabels(), visible=False)
+    ax_sph.text(
+        0.98,
+        0.92,
+        rf"$\chi^2_\nu = {spheres['chi_r_sph']:.1f}$",
+        transform=ax_sph.transAxes,
+        ha="right",
+        va="top",
+        fontsize=9,
+    )
+
+    ph_ell = _rotational_phase(t, t0, ellipsoid["freq"])
+    res_ell = y - ellipsoid_mag(
+        ph_ell,
+        ellipsoid["m_ab"],
+        ellipsoid["b_over_a"],
+        1.0,
+        0.0,
+        ellipsoid["theta0"],
+    )
+    for filt in present:
+        sel = f_fit == filt
+        if not np.any(sel):
+            continue
+        ax_ell.errorbar(
+            ph_show[sel],
+            res_ell[sel],
+            yerr=dy[sel],
+            fmt="o",
+            ms=3,
+            alpha=0.75,
+            color=band_colors.get(f"L{filt}", "k"),
+            ecolor="0.75",
+        )
+    ax_ell.axhline(0, color="k", lw=1)
+    ax_ell.set_ylabel("Data $-$ ellipsoid")
+    ax_ell.set_xlabel("Phase at the rotation period ($2P$)")
+    ax_ell.invert_yaxis()
+    ax_ell.set_xlim(0, 1)
+    ax_ell.grid(True, alpha=0.3)
+    ax_ell.text(
+        0.98,
+        0.92,
+        rf"$\chi^2_\nu = {ellipsoid['chi_r_ell']:.1f}$",
+        transform=ax_ell.transAxes,
+        ha="right",
+        va="top",
+        fontsize=9,
+    )
+
+    for ax_draw in (ax_sph_draw, ax_ell_draw):
+        ax_draw.set_xticks([])
+        ax_draw.set_yticks([])
+        for spine in ax_draw.spines.values():
+            spine.set_visible(False)
+    _draw_sphere_inset(
+        ax_sph_draw,
+        spheres["q_sph"],
+        box=[0.02, 0.02, 0.96, 0.96],
+        radii=False,
+        phi_deg=float(spheres["phi_sph_deg"]),
+    )
+    _draw_ellipsoid_inset(
+        ax_ell_draw, ellipsoid["b_over_a"], box=[0.02, 0.02, 0.96, 0.96]
+    )
+    mvroc_mark(ax)
+    return save_figure(fig, path)
+
+
+def shape_fit_solution(df_obj, provid, solutions_row):
+    """Contact-binary + ellipsoid shape fit for each MVROC MOI solution.
+
+    Literature periods are not used. Writes one figure per solution and returns
+    one results row per solution (solution_id + shape parameters).
+    """
+    specs = _moi_solution_periods(solutions_row)
+    if not specs:
+        print(f"  skip shape_fit_solution for {provid}: no MVROC solutions")
+        return None
+
+    frame = _prepare_multiband_twopeak_frame(df_obj, tag="shape_fit_solution")
+    if frame is None:
+        print(f"  skip shape_fit_solution for {provid}: fewer than 2 filters")
+        return None
+
+    present = frame["present"]
+    f_fit = frame["f_fit"]
+    t_fit = frame["t_fit"]
+    s_fit = frame["s_fit"]
+    ref = frame["ref"]
+    t0 = frame["t0"]
+
+    rows = []
+    paths = []
+    for sol_id, p_rot_h in specs:
+        p_rot_h = float(p_rot_h)
+        freq = 48.0 / p_rot_h
+        item = _score_twopeak_frequency(
+            frame, freq, [f"MVROC solution {sol_id}"]
+        )
+        # Color-corrected magnitudes onto the reference filter (not bolometric).
+        y = np.asarray(item["y_on_ref"], dtype=float)
+        dy = np.maximum(np.asarray(s_fit, dtype=float), 1e-4)
+        spheres = _fit_touching_spheres(t_fit, y, dy, freq, t0)
+        ellipsoid = _fit_ellipsoid(t_fit, y, dy, freq, t0)
+        fig_path = shape_fit_solution_path(provid, sol_id)
+        written = _plot_shape_fit_solution(
+            provid,
+            sol_id,
+            p_rot_h,
+            t_fit,
+            y,
+            dy,
+            f_fit,
+            present,
+            ref,
+            t0,
+            freq,
+            spheres,
+            ellipsoid,
+            path=fig_path,
+        )
+        paths.append(written)
+        row = {
+            "solution_id": str(sol_id),
+            "p_rot_h": p_rot_h,
+        }
+        row.update(
+            {column: spheres[column] for column in SHAPE_COLUMNS if column in spheres}
+        )
+        row.update(
+            {
+                column: ellipsoid[column]
+                for column in SHAPE_COLUMNS
+                if column in ellipsoid
+            }
+        )
+        rows.append(row)
+        print(
+            f"  shape_fit_solution sol {sol_id}: P_rot = {p_rot_h:.6f} h, "
+            f"chi_r_sph = {spheres['chi_r_sph']:.2f}, q = {spheres['q_sph']:.3f}; "
+            f"chi_r_ell = {ellipsoid['chi_r_ell']:.2f}, b/a = {ellipsoid['b_over_a']:.3f}"
+        )
+
+    return {"paths": paths, "solutions": rows, "n_solutions": len(rows)}
 
 
 def _given_periods(df_rot, provid):
@@ -3881,8 +4698,8 @@ def _given_periods(df_rot, provid):
         return []
     found = []
     for column, label, key in (
-        ("period_lsm_hr", "Literature, Lomb-Scargle", "lsm"),
-        ("period_fourier_hr", "Literature, Fourier", "fourier"),
+        ("period_lsm_hr", "Literature (Greenstreet, Lomb-Scargle)", "lsm"),
+        ("period_fourier_hr", "Literature (Greenstreet, Fourier)", "fourier"),
     ):
         if column not in row.columns:
             continue
@@ -3892,7 +4709,10 @@ def _given_periods(df_rot, provid):
     if len(found) == 2:
         first, second = found[0][0], found[1][0]
         if abs(first - second) <= max(0.01, 0.005 * first):
-            return [(first, "Literature, Lomb-Scargle and Fourier", "lsm+fourier")]
+            return [(first, "Literature (Greenstreet)", "lsm+fourier")]
+    if len(found) == 1:
+        p, _, key = found[0]
+        return [(p, "Literature (Greenstreet)", key)]
     return found
 
 
@@ -4812,6 +5632,7 @@ def process(
     band=None,
     exclude_lx=EXCLUDE_LX,
     Nb=3,
+    use_selrule=False,
 ):
     print(f"{provid}")
     kinds = [kind for kind in ANALYSIS if kind in analysis and kind != "compare"]
@@ -4821,12 +5642,34 @@ def process(
     if csv_path.exists():
         try:
             df_csv = pd.read_csv(csv_path)
+            if "shape_fit_solution" in analysis:
+                # MOI / shape report: solution_id + shape params (no epoch/n_obs).
+                csv_ok = (
+                    (df_csv["provid"].astype(str) == str(provid)).any()
+                    and "solution_id" in df_csv.columns
+                    and "chi_r_sph" in df_csv.columns
+                    and "q_sph" in df_csv.columns
+                )
+            elif "folding_solution" in analysis:
+                # Fold-only MOC report: solution_id + fold metrics (no epoch/n_obs).
+                csv_ok = (
+                    (df_csv["provid"].astype(str) == str(provid)).any()
+                    and "solution_id" in df_csv.columns
+                    and "p_rot_h" in df_csv.columns
+                    and "chi2_nu" in df_csv.columns
+                )
+            else:
             csv_ok = (provid in df_csv["provid"].values) and (
                 "epoch_utc_ini" in df_csv.columns
-                and "obs_duration" in df_csv.columns
+                    and "obs_duration" in df_csv.columns
             )
             requested = BAND if band is None or str(band).strip() == "" else str(band).strip()
-            if csv_ok and requested != "Lx":
+            if (
+                csv_ok
+                and "shape_fit_solution" not in analysis
+                and "folding_solution" not in analysis
+                and requested != "Lx"
+            ):
                 if "band_periodogram" not in df_csv.columns:
                     csv_ok = requested == BAND
                 else:
@@ -4863,6 +5706,15 @@ def process(
                 for column in ("p_rot_lit_h", "chi2_nu_lit", "lit_label"):
                     if column not in df_csv.columns:
                         csv_ok = False
+                # REMOVABLE: selrule columns when literature ran with keep-rule
+                if use_selrule:
+                    for column in (
+                        "selrule_tested",
+                        "selrule_kept",
+                        "selrule_reason",
+                    ):
+                        if column not in df_csv.columns:
+                            csv_ok = False
             if csv_ok and "multiband_photometry_nightalias" in analysis:
                 for column in (
                     "nightalias_tested",
@@ -4873,6 +5725,29 @@ def process(
                         csv_ok = False
             if csv_ok and "justfold" in analysis:
                 if "p_rot_justfold_h" not in df_csv.columns:
+                    csv_ok = False
+            if csv_ok and "folding_solution" in analysis:
+                # Fold / MOI CSV uses solution_id + fold metrics (no lit rows).
+                for column in ("solution_id", "p_rot_h", "chi2_nu", "amp"):
+                    if column not in df_csv.columns:
+                        csv_ok = False
+                        break
+                mine = df_csv["provid"].astype(str) == str(provid)
+                if csv_ok and mine.sum() < 1:
+                    csv_ok = False
+                # Incomplete fold colour dump: filters list z but i-z was dropped.
+                if (
+                    csv_ok
+                    and "filters" in df_csv.columns
+                    and "i-z" in df_csv.columns
+                ):
+                    sub = df_csv.loc[mine]
+                    listed_z = (
+                        sub["filters"]
+                        .astype(str)
+                        .str.contains(r"(?:^|,)z(?:,|$)", regex=True, na=False)
+                    )
+                    if bool(listed_z.any()) and not bool(sub.loc[listed_z, "i-z"].notna().any()):
                     csv_ok = False
         except Exception:
             csv_ok = False
@@ -4900,6 +5775,39 @@ def process(
             written.append(plot_lightcurve_h(df_obj, provid))
 
         fit = None
+        if "folding_solution" in analysis:
+            solutions_table = getattr(df_rot, "attrs", {}).get("moi_solutions")
+            if solutions_table is None:
+                solutions_table = load_moi_solutions()
+            sol_rows = solutions_table.loc[
+                solutions_table["provid"].astype(str).str.strip() == str(provid).strip()
+            ]
+            if sol_rows.empty:
+                return None, f"No entry for {provid} in {MOI_SOLUTIONS.name}"
+            folded = folding_solution(df_obj, provid, df_rot, sol_rows.iloc[0])
+            if folded is None:
+                return None, "folding_solution could not fold the selected periods"
+            fit = {"provid": provid, "folding_solution": folded}
+            if folded.get("path") is not None:
+                written.append(folded["path"])
+
+        if "shape_fit_solution" in analysis:
+            solutions_table = getattr(df_rot, "attrs", {}).get("moi_solutions")
+            if solutions_table is None:
+                solutions_table = load_moi_solutions()
+            sol_rows = solutions_table.loc[
+                solutions_table["provid"].astype(str).str.strip() == str(provid).strip()
+            ]
+            if sol_rows.empty:
+                return None, f"No entry for {provid} in {MOI_SOLUTIONS.name}"
+            shaped = shape_fit_solution(df_obj, provid, sol_rows.iloc[0])
+            if shaped is None:
+                return None, "shape_fit_solution could not fit the selected periods"
+            if fit is None:
+                fit = {"provid": provid}
+            fit["shape_fit_solution"] = shaped
+            written.extend(shaped.get("paths") or [])
+
         needs_single = any(
             k in analysis
             for k in (
@@ -4954,7 +5862,7 @@ def process(
                 )
                 if wdem is not None:
                     fit["democratic_weighted"] = wdem
-            if "phase" in analysis:
+                    if "phase" in analysis:
                 written.append(
                     plot_phase_allbands(
                         df_obj,
@@ -5043,7 +5951,7 @@ def process(
                     )
                 else:
                     mb_nightalias = multiband_photometry_nightalias(
-                        df_obj, provid, vote_merged
+                        df_obj, provid, vote_merged, use_selrule=use_selrule
                     )
                     if mb_nightalias is not None and mb_nightalias.get("no_two_peaks"):
                         return (
@@ -5064,7 +5972,11 @@ def process(
                     )
                 else:
                     mb_literature = multiband_photometry_compare_literature(
-                        df_obj, provid, vote_merged, df_rot
+                        df_obj,
+                        provid,
+                        vote_merged,
+                        df_rot,
+                        use_selrule=use_selrule,
                     )
                     if mb_literature is not None and mb_literature.get("no_two_peaks"):
                         return (
@@ -5121,28 +6033,28 @@ def process(
                 or adopted is not None
             ):
                 stale = []
-                if "phase_model" in analysis:
-                    stale.append(output_path("phase_model", provid))
-                if "timemodel" in analysis:
-                    stale.append(output_path("timemodel", provid))
+                    if "phase_model" in analysis:
+                        stale.append(output_path("phase_model", provid))
+                    if "timemodel" in analysis:
+                        stale.append(output_path("timemodel", provid))
                 if "timemodel_Lk" in analysis:
                     stale.append(output_path("timemodel_Lk", provid))
-                if "shape_fit" in analysis:
-                    stale.extend(
-                        [
-                            output_path("spheres", provid),
-                            output_path("ellipsoid", provid),
-                        ]
-                    )
-                if "literature" in analysis:
-                    stale.append(output_path("literature", provid))
-                if "multiband_photometry" in analysis:
-                    stale.append(output_path("multiband_phase_model", provid))
-                if "shape_fit_multiband" in analysis:
-                    stale.append(output_path("shape_multiband", provid))
-                for stale_path in stale:
-                    if stale_path.exists():
-                        stale_path.unlink()
+                    if "shape_fit" in analysis:
+                        stale.extend(
+                            [
+                                output_path("spheres", provid),
+                                output_path("ellipsoid", provid),
+                            ]
+                        )
+                    if "literature" in analysis:
+                        stale.append(output_path("literature", provid))
+                    if "multiband_photometry" in analysis:
+                        stale.append(output_path("multiband_phase_model", provid))
+                    if "shape_fit_multiband" in analysis:
+                        stale.append(output_path("shape_multiband", provid))
+                    for stale_path in stale:
+                        if stale_path.exists():
+                            stale_path.unlink()
             if "phase_model" in analysis:
                 written.append(Lr_phase_curve(provid, fit))
             if "shape_fit" in analysis:
@@ -5267,8 +6179,125 @@ def process(
         return None, f"Unexpected error during processing: {e}"
 
 
+def _moi_solution_result_rows(provid, fit):
+    """One results row per MVROC solution: fold metrics + shape params.
+
+    Literature folding panels are drawn but not written to the CSV. Object
+    window / n_obs columns are omitted; the id column is solution_id.
+    """
+    shape_by_id = {
+        str(sol["solution_id"]): sol
+        for sol in (fit.get("shape_fit_solution") or {}).get("solutions", [])
+    }
+    fold_sols = (fit.get("folding_solution") or {}).get("solutions", [])
+    fold_keys = (
+        "p_rot_h",
+        "chi2_nu",
+        "n_peaks",
+        "power",
+        "amp",
+        "amp_ratio",
+        "amp_data",
+        "scatter",
+        "span_alias",
+        "alias_label",
+        "filters",
+        "n_filters",
+        "ref_filter",
+    )
+    rows = []
+    if fold_sols:
+        for sol in fold_sols:
+            if sol.get("solution_kind") == "literature":
+                continue
+            sid = str(sol.get("solution"))
+            row = {"provid": provid, "solution_id": sid}
+            for key in fold_keys:
+                if key in sol:
+                    row[key] = sol[key]
+            for key, value in sol.items():
+                # Band counts and every colour index from the joint fold.
+                if key.startswith("n_obs_") or key in COMPARE_COLOR_COLUMNS:
+                    row[key] = value
+                elif isinstance(key, str) and "-" in key:
+                    row[key] = value
+            shaped = shape_by_id.get(sid)
+            if shaped:
+                for key, value in shaped.items():
+                    if key == "solution_id":
+                        continue
+                    # Keep the folding period as p_rot_h when both exist.
+                    if key == "p_rot_h" and "p_rot_h" in row:
+                        continue
+                    row[key] = value
+            rows.append(row)
+        return rows
+
+    for sol in shape_by_id.values():
+        rows.append({"provid": provid, **sol})
+    return rows
+
+
 def get_analysis_columns(analysis, rows=None):
     """Determine the ordered column schema for asteroid_analysis_results.csv."""
+    # MOI report: one row per MVROC solution, no object window/n_obs.
+    other_row = analysis & {
+        "periodogram",
+        "periodogram_democratic",
+        "periodogram_democratic_weighted",
+        "phase_model_compare",
+        "multiband_photometry_compare",
+        "multiband_photometry_nightalias",
+        "multiband_photometry_compare_literature",
+        "justfold",
+        "shape_fit",
+        "multiband_photometry",
+        "shape_fit_multiband",
+        "spectrum",
+    }
+    # One row per retained MVROC period (fold metrics ± shape). Used by
+    # select_MOC_solutions (fold only) and select_provid_MOI (fold + shape).
+    moi_report = (
+        not other_row
+        and (
+            "folding_solution" in analysis
+            or "shape_fit_solution" in analysis
+        )
+        and analysis
+        <= {"observations", "folding_solution", "shape_fit_solution", "compare"}
+    )
+    if moi_report:
+        n_obs_cols = [f"n_obs_{b}" for b in ("u", "g", "r", "i", "z", "y")]
+        cols = [
+            "provid",
+            "solution_id",
+            "p_rot_h",
+            "chi2_nu",
+            "n_peaks",
+            "power",
+            "amp",
+            "amp_ratio",
+            "amp_data",
+            "scatter",
+            "span_alias",
+            "alias_label",
+            "filters",
+            "n_filters",
+            "ref_filter",
+            *COMPARE_COLOR_COLUMNS,
+            *n_obs_cols,
+            *SHAPE_COLUMNS,
+        ]
+        # Never drop colour / n_obs columns across incremental flushes: an early
+        # batch without z would otherwise reindex away i-z from later rows.
+        keep_always = {"provid", *COMPARE_COLOR_COLUMNS, *n_obs_cols}
+        if rows:
+            seen_keys = {k for r in rows for k in r.keys()}
+            cols = [c for c in cols if c in seen_keys or c in keep_always]
+            extra = [k for r in rows for k in r.keys() if k not in cols]
+            cols.extend(dict.fromkeys(extra))
+        return cols
+
     cols = [
         "provid",
         "epoch_utc_ini",
@@ -5327,6 +6356,17 @@ def get_analysis_columns(analysis, rows=None):
                 "amp_ratio_lit",
                 "span_alias_lit",
                 "lit_label",
+                # REMOVABLE: present when literature ran with alias keep selrule
+                "nightalias_tested",
+                "nightalias_stable",
+                "nightalias_band",
+                "nightalias_n_nights",
+                "nightalias_n_tested",
+                "nightalias_n_kept",
+                "nightalias_periods",
+                "selrule_tested",
+                "selrule_kept",
+                "selrule_reason",
             ]
         )
     if "multiband_photometry_nightalias" in analysis:
@@ -5339,6 +6379,10 @@ def get_analysis_columns(analysis, rows=None):
                 "nightalias_n_tested",
                 "nightalias_n_kept",
                 "nightalias_periods",
+                # REMOVABLE selrule columns
+                "selrule_tested",
+                "selrule_kept",
+                "selrule_reason",
             ]
         )
     if "justfold" in analysis:
@@ -5353,6 +6397,30 @@ def get_analysis_columns(analysis, rows=None):
                 "periods_justfold",
             ]
         )
+    if "folding_solution" in analysis:
+        cols.extend(
+            [
+                "solution",
+                "solution_kind",
+                "solution_label",
+                "p_rot_h",
+                "chi2_nu",
+                "n_peaks",
+                "power",
+                "amp",
+                "amp_ratio",
+                "amp_data",
+                "scatter",
+                "span_alias",
+                "alias_label",
+                "filters",
+                "n_filters",
+                "ref_filter",
+                *COMPARE_COLOR_COLUMNS,
+            ]
+        )
+    if "shape_fit_solution" in analysis:
+        cols.extend(["solution_id", "p_rot_h", *SHAPE_COLUMNS])
     if "shape_fit" in analysis:
         cols.extend(SHAPE_COLUMNS)
     if "multiband_photometry" in analysis:
@@ -5408,6 +6476,9 @@ def write_analysis_results(rows, replaced, analysis):
         return None
     columns = get_analysis_columns(analysis, rows)
     new = pd.DataFrame(rows)
+    # Keep any columns present in the new rows even if an earlier flush had a
+    # narrower schema (e.g. no z colours yet).
+    columns = list(dict.fromkeys([*columns, *new.columns.tolist()]))
     for c in columns:
         if c not in new.columns:
             new[c] = np.nan
@@ -5450,6 +6521,8 @@ def write_analysis_results(rows, replaced, analysis):
         "nightalias_n_nights",
         "nightalias_n_tested",
         "nightalias_n_kept",
+        "selrule_tested",
+        "selrule_kept",
         "n_peaks_justfold",
         "span_alias_justfold",
     ]
@@ -5604,8 +6677,8 @@ def select_provid_list(provids=None, Nb=3):
     analysis = {
         "observations",
         "periodogram_democratic",
-        #"multiband_photometry_compare",
         "multiband_photometry_nightalias",
+        #"multiband_photometry_compare",
         #"lightcurve",
         #"periodogram",
         #"periodogram_democratic",
@@ -5884,6 +6957,48 @@ def merge_equivalent_provids(df_set, groups):
     return merged, alias_map
 
 
+def merge_moi_dual_provid_photometry(df_set, wanted_provids):
+    """Join dual-provid aliases onto the names used in solutions.csv.
+
+    ``rubin_objects_two_provids.csv`` prefers the MPC designation as canonical
+    (e.g. 2015 KR298), but MOI lists keep the discovery-style name (2025 MA45).
+    Photometry of every alias is remapped onto that MOI name so folding sees
+    the combined light curve.
+    """
+    wanted = {str(p).strip() for p in wanted_provids}
+    alias_map = {}
+    for group in load_two_provid_aliases():
+        provids = [str(p).strip() for p in group["provids"]]
+        hits = [p for p in provids if p in wanted]
+        if not hits:
+            continue
+        target = hits[0]
+        for provid in provids:
+            alias_map[provid] = target
+    if not alias_map:
+        merged = df_set[
+            df_set["provid"].astype(str).str.strip().isin(wanted)
+        ].copy()
+        return merged, alias_map
+
+    keep = df_set["provid"].astype(str).str.strip().isin(set(alias_map) | wanted)
+    merged = df_set.loc[keep].copy()
+    merged["provid"] = (
+        merged["provid"].astype(str).str.strip().map(lambda p: alias_map.get(p, p))
+    )
+    merged = merged[merged["provid"].isin(wanted)].copy()
+    merged = merged.sort_values(
+        by=["provid", "band", "obstime"],
+        ascending=[True, True, True],
+    ).reset_index(drop=True)
+    n_joined = len({t for t in alias_map.values() if t in wanted})
+    print(
+        f"  dual-provid merge: {n_joined} MOI asteroids joined from "
+        f"{TWOPROV_CATALOG.name}"
+    )
+    return merged, alias_map
+
+
 def select_provid_twoprov(n_min=100, Nb=3):
     """Dual-provid asteroids with combined n_obs >= n_min.
 
@@ -5957,12 +7072,12 @@ def select_provid_twoprov(n_min=100, Nb=3):
     return selected, df_set, df_rot, analysis, missing
 
 
-def select_provid_literature(n_min=50, Nb=3):
+def select_provid_literature(n_min=100, Nb=3):
     """Asteroids with a published rotation period that appear in Rubin photometry.
 
     Union of asteroids-with-rotation.csv (Greenstreet et al. 2026) and SBDB
     objects with rot_per. An asteroid enters the run only when it has at least
-    n_min observations (default 50):
+    n_min observations (default 100):
 
     - Greenstreet: n_obs is the sum over provid and alt_designation, so a
       body kept under a 2025 name still counts the older designation's
@@ -6095,6 +7210,437 @@ def select_provid_literature(n_min=50, Nb=3):
     selected.attrs["Nb"] = int(Nb)
     selected.attrs["alias_map"] = alias_map
     # Pass the merged literature table so compare_literature can read periods.
+    return selected, df_set, df_lit, analysis, missing
+
+
+def select_provid_literature_selrule(Nb=3):
+    """Literature window-alias matches plus nobs fallbacks that pass selrule.
+
+    Reads figures/figures_literature/literature_matches_window_alias.csv
+    (lit↔alias matches, plus nobs nightalias-fallback cases that pass
+    campaign_alias_keep_selrule). Runs compare_literature with the keep-rule
+    enabled; literature period panel(s) are drawn when a published P_rot
+    exists, otherwise only the algorithm panel (removable experiment).
+    Figures go to figures/figures_literature_selrule.
+    """
+    fig_dir = ROOT / "figures/figures_literature_selrule"
+    set_fig_dir(fig_dir)
+    analysis = {
+        "observations",
+        "periodogram_democratic",
+        "multiband_photometry_compare_literature",
+    }
+    check_analysis(analysis, "analysis")
+
+    list_path = LITERATURE_SELRULE_LIST
+    if not list_path.exists():
+        raise SystemExit(
+            f"Missing selrule target list: {list_path}. "
+            "Build it from the literature window-alias search first."
+        )
+    targets = (
+        pd.read_csv(list_path)["provid"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .tolist()
+    )
+    # Preserve CSV order, drop duplicates
+    wanted = []
+    seen = set()
+    for provid in targets:
+        if provid and provid not in seen:
+            wanted.append(provid)
+            seen.add(provid)
+    print(
+        f"Literature selrule list: {len(wanted)} provids from {list_path.name}"
+    )
+    if not wanted:
+        raise SystemExit(f"No provids in {list_path}")
+
+    df_set_full = load_df_set()
+    counts = observation_counts(df_set_full).set_index("provid")["n_obs"]
+    counts.index = counts.index.astype(str)
+    present = set(counts.index)
+
+    paper = load_rotation_catalog()
+    paper_groups = []
+    covered = set()
+    for _, row in paper.iterrows():
+        provid = str(row["provid"]).strip()
+        names = [provid]
+        alt = row.get("alt_designation")
+        if pd.notna(alt) and str(alt).strip() and str(alt).strip() != provid:
+            names.append(str(alt).strip())
+        if not any(n in seen for n in names):
+            continue
+        # Canonical name: prefer the list entry when it is one of the aliases
+        canonical = next((n for n in names if n in seen), provid)
+        n_total = int(sum(int(counts[n]) if n in present else 0 for n in names))
+        paper_groups.append(
+            {
+                "canonical": canonical,
+                "provids": names,
+                "n_obs_total": n_total,
+            }
+        )
+        covered.update(names)
+
+    alias_map = {}
+    frames = []
+    if paper_groups:
+        df_paper, alias_map = merge_equivalent_provids(df_set_full, paper_groups)
+        paper_canonicals = {g["canonical"] for g in paper_groups}
+        frames.append(df_paper[df_paper["provid"].isin(paper_canonicals)].copy())
+
+    sbdb_only = [p for p in wanted if p not in covered]
+    if sbdb_only:
+        frames.append(df_set_full[df_set_full["provid"].isin(sbdb_only)].copy())
+
+    if not frames:
+        raise SystemExit("No photometry for literature selrule provids.")
+
+    df_set = pd.concat(frames, ignore_index=True)
+    df_set = df_set.sort_values(
+        by=["provid", "band", "obstime"],
+        ascending=[True, True, True],
+    ).reset_index(drop=True)
+    obs_counts = observation_counts(df_set).set_index("provid")["n_obs"]
+
+    selected_rows = []
+    missing = []
+    for provid in wanted:
+        if provid in obs_counts.index:
+            selected_rows.append(
+                {
+                    "provid": provid,
+                    "n_obs": int(obs_counts[provid]),
+                    "band": BAND,
+                }
+            )
+        else:
+            missing.append(provid)
+    if missing:
+        print(f"No observations for: {', '.join(missing)}")
+    if not selected_rows:
+        raise SystemExit("No literature selrule asteroids have observations.")
+
+    selected = pd.DataFrame(selected_rows)
+    print(
+        f"{len(selected)} literature selrule asteroids selected "
+        f"(alias keep selrule ON)"
+    )
+    df_lit = load_literature_rotation()
+    df_lit = df_lit[df_lit["provid"].isin(selected["provid"])].reset_index(drop=True)
+    selected.attrs["missing"] = missing
+    selected.attrs["exclude_lx"] = EXCLUDE_LX
+    selected.attrs["Nb"] = int(Nb)
+    selected.attrs["alias_map"] = alias_map
+    selected.attrs["use_alias_keep_selrule"] = True
+    return selected, df_set, df_lit, analysis, missing
+
+
+def load_vro_mpc_alias_groups(path=None):
+    """Groups of VRO provids that share one MPC designation in db_vro_mpc.csv."""
+    path = Path(path) if path is not None else VRO_MPC_CSV
+    if not path.exists():
+        raise SystemExit(f"Missing VRO↔MPC cross-match: {path}")
+    table = pd.read_csv(path)
+    table["provid_vro"] = table["provid_vro"].astype(str).str.strip()
+    table["provid_mpc"] = table["provid_mpc"].astype(str).str.strip()
+    groups = []
+    for provid_mpc, part in table.groupby("provid_mpc", sort=False):
+        provids = [
+            p for p in part["provid_vro"].tolist() if p and p not in ("nan", "None")
+        ]
+        provids = list(dict.fromkeys(provids))
+        if len(provids) < 2:
+            continue
+        groups.append({"provid_mpc": str(provid_mpc), "provids": provids})
+    return groups
+
+
+def merge_vro_mpc_equivalent_provids(df_set, groups=None):
+    """Join dual VRO provids that share an MPC designation onto one name.
+
+    The canonical name is the alias with the most rows already in ``df_set``.
+    """
+    if groups is None:
+        groups = load_vro_mpc_alias_groups()
+    counts = df_set.groupby(df_set["provid"].astype(str).str.strip()).size()
+    alias_map = {}
+    for group in groups:
+        present = [p for p in group["provids"] if p in counts.index]
+        if len(present) < 2:
+            continue
+        canonical = max(present, key=lambda p: int(counts.loc[p]))
+        for provid in group["provids"]:
+            alias_map[provid] = canonical
+    if not alias_map:
+        return df_set.copy(), alias_map
+    merged = df_set.copy()
+    merged["provid"] = (
+        merged["provid"].astype(str).str.strip().map(lambda p: alias_map.get(p, p))
+    )
+    merged = merged.sort_values(
+        by=["provid", "band", "obstime"],
+        ascending=[True, True, True],
+    ).reset_index(drop=True)
+    n_joined = len({t for t in alias_map.values()})
+    print(
+        f"  VRO↔MPC dual-provid merge: {n_joined} objects joined from "
+        f"{VRO_MPC_CSV.name}"
+    )
+    return merged, alias_map
+
+
+def load_df_set_mvroc_moi():
+    """MOI photometry from pipeline products: moi obs + state H, no code/data/.
+
+    Band / rmsmag / sky come from ``db_mvroc_moi.parquet``. Absolute magnitude
+    ``H`` is joined from ``db_mvroc_state.parquet`` on observation ``id``.
+    Dual VRO provids that share an MPC designation are merged using
+    ``db_vro_mpc.csv``.
+    """
+    if not MOI_OBS_PARQUET.exists():
+        raise SystemExit(f"Missing MOI observation product: {MOI_OBS_PARQUET}")
+    if not STATE_PARQUET.exists():
+        raise SystemExit(f"Missing state product: {STATE_PARQUET}")
+
+    columns = [
+        "id",
+        "obstime",
+        "permid",
+        "provid",
+        "ra",
+        "dec",
+        "band",
+        "mag",
+        "rmsmag",
+    ]
+    print(f"Loading MOI observations from {MOI_OBS_PARQUET.name} …")
+    df = pd.read_parquet(MOI_OBS_PARQUET, columns=columns)
+    print(f"  {len(df):,} MOI observation rows, {df['provid'].nunique():,} provids")
+
+    print(f"Loading absolute magnitudes from {STATE_PARQUET.name} …")
+    state = pd.read_parquet(
+        STATE_PARQUET, columns=["id", "H", "provid_mpc", "permid"]
+    )
+    state["id"] = pd.to_numeric(state["id"], errors="coerce")
+    df["id"] = pd.to_numeric(df["id"], errors="coerce")
+    state_h = state.dropna(subset=["id"]).drop_duplicates("id", keep="first")
+    df = df.merge(
+        state_h[["id", "H", "provid_mpc"]],
+        on="id",
+        how="left",
+        suffixes=("", "_state"),
+    )
+    n_h = int(df["H"].notna().sum())
+    print(f"  H matched for {n_h:,} / {len(df):,} rows ({100.0 * n_h / max(len(df), 1):.1f}%)")
+
+    df["provid"] = df["provid"].astype(str).str.strip()
+    df = df[df["provid"].ne("") & df["provid"].ne("nan")].copy()
+    df["mpc_designation"] = df["provid_mpc"].astype(str).str.strip()
+    df.loc[df["mpc_designation"].isin(["", "nan", "None"]), "mpc_designation"] = pd.NA
+    if "permid" in df.columns:
+        df["permid"] = df["permid"].astype("string")
+
+    df["band"] = df["band"].map(
+        lambda b: f"L{b}" if pd.notnull(b) and len(str(b)) == 1 else b
+    )
+    df[["ra", "dec", "mag", "rmsmag", "H"]] = df[
+        ["ra", "dec", "mag", "rmsmag", "H"]
+    ].apply(pd.to_numeric, errors="coerce")
+    df["rmsmag"] = df["rmsmag"].where(df["rmsmag"].notna() & (df["rmsmag"] > 0), 0.01)
+    df["obstime"] = pd.to_datetime(df["obstime"])
+    df["night"] = df["obstime"].dt.floor("D")
+
+    df, alias_map = merge_vro_mpc_equivalent_provids(df)
+    df = df.sort_values(
+        by=["provid", "band", "obstime"],
+        ascending=[True, True, True],
+    ).reset_index(drop=True)
+    df.attrs["alias_map"] = alias_map
+    print(
+        f"MOI photometry ready: {len(df):,} rows, "
+        f"{df['provid'].nunique():,} objects → no code/data/obs parquet"
+    )
+    return df
+
+
+def select_provid_mvroc_moi(Nb=3):
+    """MOI light curves from pipeline products into figures_mvroc_moi.
+
+    Uses ``db_mvroc_moi.parquet`` + ``db_mvroc_state.parquet`` (H) and
+    ``db_vro_mpc.csv`` (provid equivalences). Does not read ``code/data/``
+    photometry. Runs democratic periodogram + multiband 2-peak compare.
+    """
+    fig_dir = ROOT / "figures" / "figures_mvroc_moi"
+    set_fig_dir(fig_dir)
+    analysis = {
+        "observations",
+        "periodogram_democratic",
+        "multiband_photometry_compare",
+    }
+    check_analysis(analysis, "analysis")
+
+    df_set = load_df_set_mvroc_moi()
+    df_obs = observation_counts(df_set)
+    selected = df_obs.reset_index(drop=True)
+    selected["band"] = BAND
+    selected = selected.sort_values("n_obs", ascending=False).reset_index(drop=True)
+    if selected.empty:
+        raise SystemExit("No MOI asteroids found in pipeline products.")
+
+    # Democratic / multiband compare do not need literature periods.
+    df_rot = pd.DataFrame(columns=["provid"])
+    missing = []
+    selected.attrs["missing"] = missing
+    selected.attrs["exclude_lx"] = EXCLUDE_LX
+    selected.attrs["Nb"] = int(Nb)
+    selected.attrs["alias_map"] = getattr(df_set, "attrs", {}).get("alias_map", {})
+    selected.attrs["skip_geometry"] = True
+    print(
+        f"{len(selected)} MOI asteroids selected for democratic + multiband "
+        f"compare → {fig_dir}"
+    )
+    return selected, df_set, df_rot, analysis, missing
+
+
+def select_MOC_solutions(Nb=3):
+    """MOC solutions: fold every retained period into figures_mvroc_sol.
+
+    Reads provids and periods from figures/figures_MOI/solutions.csv. Runs
+    observations + folding_solution only (no shape fits). Figures and the
+    results CSV go to figures/figures_mvroc_sol. One CSV row per MVROC
+    solution (solution_id, fold metrics, colours); literature panels are
+    drawn but not written. No epoch / object n_obs columns.
+    """
+    fig_dir = ROOT / "figures" / "figures_mvroc_sol"
+    set_fig_dir(fig_dir)
+    analysis = {
+        "observations",
+        "folding_solution",
+    }
+    check_analysis(analysis, "analysis")
+
+    if not MOI_SOLUTIONS.exists():
+        raise SystemExit(f"Missing MOI solutions list: {MOI_SOLUTIONS}")
+    if not MOI_SELECTION.exists():
+        raise SystemExit(f"Missing MOI selection: {MOI_SELECTION}")
+
+    solutions = load_moi_solutions(MOI_SOLUTIONS)
+    selection = pd.read_csv(MOI_SELECTION)
+    selection["provid"] = selection["provid"].astype(str).str.strip()
+    wanted = solutions["provid"].astype(str).str.strip().tolist()
+    wanted_set = set(wanted)
+    n_sol = int(solutions["solutions"].astype(str).str.split("/").map(len).sum())
+    print(
+        f"MOC solutions folding list: {len(wanted)} asteroids, "
+        f"{n_sol} MVROC solutions from {MOI_SOLUTIONS.name}"
+    )
+
+    df_lit = load_literature_rotation()
+    df_lit.attrs["moi_solutions"] = solutions
+    df_set_full = load_df_set()
+    df_set, alias_map = merge_moi_dual_provid_photometry(df_set_full, wanted_set)
+    df_obs = observation_counts(df_set)
+    selected = df_obs[df_obs["provid"].isin(wanted_set)].reset_index(drop=True)
+    selected["band"] = BAND
+    order = {p: i for i, p in enumerate(wanted)}
+    selected["_o"] = selected["provid"].map(order)
+    selected = selected.sort_values("_o").drop(columns="_o").reset_index(drop=True)
+
+    present = set(selected["provid"].astype(str))
+    missing = [p for p in wanted if p not in present]
+    if missing:
+        print(
+            f"  {len(missing)} MOC asteroids have no photometry in the observation set"
+        )
+    if selected.empty:
+        raise SystemExit("No MOC asteroids found in the observation set.")
+
+    selected.attrs["missing"] = missing
+    selected.attrs["exclude_lx"] = EXCLUDE_LX
+    selected.attrs["Nb"] = int(Nb)
+    selected.attrs["moi_solutions"] = solutions
+    selected.attrs["alias_map"] = alias_map
+    df_set = df_set[df_set["provid"].isin(selected["provid"])].copy()
+    n_in_sel = int(selection["provid"].isin(wanted_set).sum())
+    print(
+        f"{len(selected)} MOC asteroids selected for folding "
+        f"({n_in_sel} also listed in {MOI_SELECTION.name}) → {fig_dir}"
+    )
+    return selected, df_set, df_lit, analysis, missing
+
+
+def select_provid_MOI(Nb=3):
+    """MVROC-MOI asteroids: folding, then shape fit, in figures_MOI_folding.
+
+    Reads provids and periods from figures/figures_MOI/solutions.csv. Runs
+    folding_solution (MVROC + literature panels) and then shape_fit_solution
+    (MVROC solutions only). Both figure sets go to figures/figures_MOI_folding.
+    The results CSV has one row per MVROC solution (solution_id + fold metrics
+    + shape params); no literature rows and no epoch/n_obs columns.
+
+    For fold-only (no shape), use select_MOC_solutions → figures_mvroc_sol.
+    """
+    fig_dir = ROOT / "figures/figures_MOI_folding"
+    set_fig_dir(fig_dir)
+    analysis = {
+        "observations",
+        "folding_solution",
+        "shape_fit_solution",
+    }
+    check_analysis(analysis, "analysis")
+
+    if not MOI_SOLUTIONS.exists():
+        raise SystemExit(f"Missing MOI solutions list: {MOI_SOLUTIONS}")
+    if not MOI_SELECTION.exists():
+        raise SystemExit(f"Missing MOI selection: {MOI_SELECTION}")
+
+    solutions = load_moi_solutions(MOI_SOLUTIONS)
+    selection = pd.read_csv(MOI_SELECTION)
+    selection["provid"] = selection["provid"].astype(str).str.strip()
+    wanted = solutions["provid"].astype(str).str.strip().tolist()
+    wanted_set = set(wanted)
+    print(
+        f"MOI folding+shape list: {len(wanted)} asteroids, "
+        f"{solutions['solutions'].astype(str).str.split('/').map(len).sum()} "
+        f"MVROC solutions from {MOI_SOLUTIONS.name}"
+    )
+
+    df_lit = load_literature_rotation()
+    df_lit.attrs["moi_solutions"] = solutions
+    df_set_full = load_df_set()
+    df_set, alias_map = merge_moi_dual_provid_photometry(df_set_full, wanted_set)
+    df_obs = observation_counts(df_set)
+    selected = df_obs[df_obs["provid"].isin(wanted_set)].reset_index(drop=True)
+    selected["band"] = BAND
+    order = {p: i for i, p in enumerate(wanted)}
+    selected["_o"] = selected["provid"].map(order)
+    selected = selected.sort_values("_o").drop(columns="_o").reset_index(drop=True)
+
+    present = set(selected["provid"].astype(str))
+    missing = [p for p in wanted if p not in present]
+    if missing:
+        print(
+            f"  {len(missing)} MOI asteroids have no photometry in the observation set"
+        )
+    if selected.empty:
+        raise SystemExit("No MOI asteroids found in the observation set.")
+
+    selected.attrs["missing"] = missing
+    selected.attrs["exclude_lx"] = EXCLUDE_LX
+    selected.attrs["Nb"] = int(Nb)
+    selected.attrs["moi_solutions"] = solutions
+    selected.attrs["alias_map"] = alias_map
+    df_set = df_set[df_set["provid"].isin(selected["provid"])].copy()
+    n_in_sel = int(selection["provid"].isin(wanted_set).sum())
+    print(
+        f"{len(selected)} MOI asteroids selected for folding + shape "
+        f"({n_in_sel} also listed in {MOI_SELECTION.name})"
+    )
     return selected, df_set, df_lit, analysis, missing
 
 
@@ -6259,7 +7805,11 @@ def _main(t_start):
         # select_provid_revisit: data/revisit.csv (LONO) into figures_nobs
         # select_provid_updateH: data/updateH.csv into figures_nobs/updateH
         # select_provid_twoprov: dual MPC provids merged, combined n_obs >= 100
-        # select_provid_literature: Greenstreet (combined n_obs) + SBDB rot_per, n_obs >= 50
+        # select_provid_literature: Greenstreet (combined n_obs) + SBDB rot_per, n_obs >= 100
+        # select_provid_literature_selrule: lit↔alias + nobs selrule-keep, literature+selrule
+        # select_MOC_solutions: figures_MOI/solutions.csv → fold only → figures_mvroc_sol
+        # select_provid_MOI: figures_MOI/solutions.csv → folding + shape_fit
+        # select_provid_mvroc_moi: pipeline products (state H + moi obs) → figures_mvroc_moi
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_all())
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_list())
         selected, df_set, df_rot, analysis, missing = unpack_selection(
@@ -6271,7 +7821,11 @@ def _main(t_start):
             # select_provid_revisit()
             # select_provid_updateH()
             # select_provid_twoprov()
-            select_provid_literature()
+            # select_provid_literature()
+            # select_provid_literature_selrule()
+            # select_provid_MOI()
+            # select_MOC_solutions()
+            select_provid_mvroc_moi()
         )
         # selected, df_set, df_rot, analysis, missing = unpack_selection(select_provid_medellin())
     if not force:
@@ -6289,6 +7843,7 @@ def _main(t_start):
     replaced = set()
     exclude_lx = tuple(selected.attrs.get("exclude_lx", EXCLUDE_LX))
     nb = int(selected.attrs.get("Nb", 2))
+    use_selrule = bool(selected.attrs.get("use_alias_keep_selrule", False))
     bands = (
         selected["band"]
         if "band" in selected.columns
@@ -6312,6 +7867,7 @@ def _main(t_start):
             band=band,
             exclude_lx=exclude_lx,
             Nb=nb,
+            use_selrule=use_selrule,
         )
         if fit == "skip":
             succeeded.append(provid)
@@ -6414,6 +7970,10 @@ def _main(t_start):
                         )
                         row["nightalias_n_kept"] = mb_row.get("nightalias_n_kept", 0)
                         row["nightalias_periods"] = mb_row.get("nightalias_periods", "")
+                        # REMOVABLE selrule columns
+                        row["selrule_tested"] = mb_row.get("selrule_tested", 0)
+                        row["selrule_kept"] = mb_row.get("selrule_kept", 0)
+                        row["selrule_reason"] = mb_row.get("selrule_reason", "")
                     if "multiband_photometry_compare_literature" in analysis:
                         row["p_rot_lit_h"] = mb_row.get("p_rot_lit_h", np.nan)
                         row["chi2_nu_lit"] = mb_row.get("chi2_nu_lit", np.nan)
@@ -6422,6 +7982,23 @@ def _main(t_start):
                         row["amp_ratio_lit"] = mb_row.get("amp_ratio_lit", np.nan)
                         row["span_alias_lit"] = mb_row.get("span_alias_lit", np.nan)
                         row["lit_label"] = mb_row.get("lit_label", "")
+                        # REMOVABLE: selrule / nightalias bookkeeping
+                        row["nightalias_tested"] = mb_row.get("nightalias_tested", 0)
+                        row["nightalias_stable"] = mb_row.get("nightalias_stable", 0)
+                        row["nightalias_band"] = mb_row.get("nightalias_band", "")
+                        row["nightalias_n_nights"] = mb_row.get(
+                            "nightalias_n_nights", 0
+                        )
+                        row["nightalias_n_tested"] = mb_row.get(
+                            "nightalias_n_tested", 0
+                        )
+                        row["nightalias_n_kept"] = mb_row.get("nightalias_n_kept", 0)
+                        row["nightalias_periods"] = mb_row.get(
+                            "nightalias_periods", ""
+                        )
+                        row["selrule_tested"] = mb_row.get("selrule_tested", 0)
+                        row["selrule_kept"] = mb_row.get("selrule_kept", 0)
+                        row["selrule_reason"] = mb_row.get("selrule_reason", "")
 
                 if "justfold" in analysis and fit.get("justfold"):
                     folded = fit["justfold"]
@@ -6454,6 +8031,15 @@ def _main(t_start):
                 if "spectrum" in analysis:
                     row.update(fit.get("spectrum") or {})
 
+                if (
+                    "shape_fit_solution" in analysis
+                    or "folding_solution" in analysis
+                ) and (
+                    fit.get("shape_fit_solution") or fit.get("folding_solution")
+                ):
+                    # One row per MVROC solution (fold ± shape; no lit panels).
+                    peak_rows.extend(_moi_solution_result_rows(provid, fit))
+                else:
                 peak_rows.append(row)
             else:
                 failed[provid] = err or "Not enough data, or an error in the calculation"

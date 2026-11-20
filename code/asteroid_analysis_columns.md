@@ -257,3 +257,6 @@ For the \(g\), \(i\), \(z\), and \(y\) filters, written below as \(b\):
 | `n_{b}_spec` | `int` | Number of measurements in filter \(b\). | Count of measurements in that filter. It is 0 when the color is not available. |
 
 The stored color names are `g-r_spec`, `i-r_spec`, `z-r_spec`, and `y-r_spec`, each with an `_err` column.
+
+-----
+[MVROC Team](https://github.com/seap-udea/MVROC) (2026-present)

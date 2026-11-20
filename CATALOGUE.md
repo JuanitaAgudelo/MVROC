@@ -86,31 +86,23 @@ Colors from the joint multiband fit. One rotation model is shared by the filters
 | `u-g`, `g-r`, `r-i`, `i-z`, `z-y` | mag | Color, the difference of the two magnitude offsets. |
 | `u-r` | mag | Magnitude offset of u relative to r. |
 
-### Rotation: voted period
+### Photometric taxonomy
 
-The period is chosen by a vote. The voters are the Lomb–Scargle maxima of the three filters with the most measurements, excluding u and y, plus a joint Lomb–Scargle of each consecutive pair and of all three together. Periods that agree to 3%, or whose photometric frequencies differ by one or two cycles per day, count as the same vote. A unanimous vote uses the joint period of all the filters in the vote. Otherwise the reported period is the Lomb–Scargle period of the filter with the most measurements among the series that cast the winning vote.
+`gri_slope` is the slope of the solar-normalized reflectance between the LSST g and i bandpasses (483 nm and 755 nm), in percent per 100 nm. Reflectance is \(R(b)/R(r) = 10^{-0.4[(m_b-m_r)-(m_b-m_r)_\odot]}\), with solar colors g−r = 0.45 and i−r = −0.12. The i−r color is \(-(r-i)\).
+
+`photo_spec_T` is the nearest of three sketch templates used on the reflectance plots: C (slope 1.25), S (14.6), and D (22.5), assigned at the midpoints 7.9 and 18.6. It is a photometric complex label, not a published Tholen class. Both columns are empty when `g-r` or `r-i` is missing.
 
 | Column | Unit | Meaning |
 |---|---|---|
-| `p_rot_dem_h` | h | Rotation period chosen by the vote. |
-| `votes_dem` | | Number of series that voted for that period. |
-| `n_series_dem` | | Number of series in the vote. |
-| `bands_dem` | | Filters in the vote, for example `Lr+Lg+Li`. |
-| `periods_dem_h` | h | Period of each series, written as `Lr=3.33,Lg=3.33,Lr+Lg=3.33`. |
+| `gri_slope` | % / 100 nm | Reflectance slope from g to i. |
+| `photo_spec_T` | | `C`, `S`, or `D`. |
 
 ### Rotation: multiband fit on Lk
 
 Lk is the magnitude of the summed flux after each filter has been shifted onto one light curve by the fitted colors. Magnitudes in this section and in the shape fits are absolute magnitudes on Lk. The mean values `H_u` … `H_y` stay in the LSST bands.
 
-The light curve is taken to be double-peaked, so the rotational period is twice the photometric period. The fit uses between 2 and 10 Fourier harmonics and keeps the order with the lowest Bayesian information criterion. `p_rot_multi_used_h` is the period that starts the fit, here the voted period. `p_rot_multi_h` is the period after the fit.
-
 | Column | Unit | Meaning |
 |---|---|---|
-| `p_rot_multi_used_h` | h | Period used to start the multiband fit. |
-| `p_rot_multi_h` | h | Rotational period from the fit, `24 / f_rot_multi`. |
-| `f_rot_multi` | d⁻¹ | Rotational frequency. |
-| `k_harm_multi` | | Number of Fourier harmonics in the adopted model. |
-| `bic` | | Bayesian information criterion of that model. |
 | `amp_lsm_k` | mag | Peak-to-peak amplitude of the harmonic model on Lk over one cycle. |
 | `amp_photo_k` | mag | Width of the Lk magnitudes between the 1st and 99th percentiles, after clipping residuals at 3σ. |
 | `rms_multi` | mag | Root-mean-square residual of the joint fit. |
@@ -146,22 +138,6 @@ Equator-on triaxial ellipsoid (`phi = 90°`) rotating about its short axis. The 
 | `p_rot_ell_h_k` | h | Rotation period refined by the fit. |
 | `chi_r_ell_k` | | Reduced chi-squared of the fit. |
 
-### Reflectance
-
-Solar-normalized reflectance from the joint light-curve colors, relative to r, where `R(r) = 1`. The solar colors subtracted from `m_b − m_r` are g−r = 0.45, i−r = −0.12, z−r = −0.16, and y−r = −0.18. The reflectance is `10^(−0.4 × excess)`.
-
-For the g, i, z, and y filters, written below as `b`:
-
-| Column | Unit | Meaning |
-|---|---|---|
-| `{b}-r_spec` | mag | Color `m_b − m_r`. For g this equals `g-r`. For i it equals `−(r−i)`. |
-| `{b}-r_spec_err` | mag | Uncertainty of that color. |
-| `R_b` | | Solar-normalized reflectance `R(b)/R(r)`. |
-| `R_b_err` | | Uncertainty of the reflectance. |
-| `n_b_spec` | | Number of measurements in filter `b`. |
-
-The stored names are `g-r_spec`, `R_g`, `n_g_spec`, and the same pattern for i, z, and y.
-
 ### SBDB physical parameters
 
 From the JPL Small-Body Database. The number is stored without its unit. Each quantity has an `_err` column; that uncertainty is NaN when SBDB does not give a numeric error. Taxonomic classes have no numeric error.
@@ -192,13 +168,53 @@ Rotation periods from Greenstreet et al. (2026), taken from `data/asteroids-with
 
 ### Dynamics
 
-Reserved for a mean-motion resonance. They are not computed yet, so every value is NaN.
+Population and Tisserand parameters from the osculating elements `a`, `e`, `incl`, and `q`. They are not proper elements, and `flag_resonant` is a proximity flag, not a libration test.
+
+The Tisserand parameter with respect to a planet of semimajor axis \(a_p\) is
+
+\[
+T = \frac{a_p}{a} + 2\cos i\sqrt{\frac{a}{a_p}(1-e^2)}.
+\]
+
+The planet distances used here are Earth 1.000 au, Mars 1.524 au, Jupiter 5.204 au, and Neptune 30.07 au. Inclination is the ecliptic inclination `incl`.
+
+`dyn_class` is the first matching label:
+
+| Label | Condition |
+|---|---|
+| `TNO` | \(a \ge 30.1\) au |
+| `Trojan` | \(4.95 \le a \le 5.45\) au |
+| `Centaur` | \(5.45 < a < 30.1\) au |
+| `Thule` | \(4.20 \le a < 4.50\) au |
+| `Hilda` | \(3.70 \le a < 4.20\) au |
+| `Cybele` | \(3.28 \le a < 3.70\) au |
+| `NEA` | \(q < 1.3\) au |
+| `Hungaria` | \(1.78 \le a < 2.06\) au, \(i \ge 16^\circ\), \(q \ge 1.3\) au |
+| `Mars-crosser` | \(q < 1.666\) au and \(a < 2.06\) au |
+| `InnerMB` | \(2.06 \le a < 2.50\) au |
+| `MiddleMB` | \(2.50 \le a < 2.82\) au |
+| `OuterMB` | \(2.82 \le a < 3.28\) au |
+| `Other` | none of the above |
+
+`flag_resonant` is 1 when `a` falls inside the half-width of a Jupiter mean-motion resonance, and 0 otherwise. `resonant_ratio` is that resonance written as asteroid revolutions to Jupiter revolutions (`3:1`, `3:2`, `1:1`, …). If several windows overlap, the closest one in units of its half-width is kept. The nominal semimajor axis is \(a_J (n_J/n)^{2/3}\) with \(a_J = 5.204\) au.
+
+| Ratio | Half-width |
+|---|---:|
+| `4:1`, `3:1`, `5:2`, `7:3` | 0.03 au |
+| `2:1` | 0.04 au |
+| `4:3` | 0.08 au |
+| `3:2` | 0.15 au |
+| `1:1` | 0.25 au |
 
 | Column | Unit | Meaning |
 |---|---|---|
-| `res_body` | | Planet the asteroid is resonant with. |
-| `res_flag` | | Whether a resonance is identified. |
-| `res_type` | | Kind of resonance. |
-| `res_kp` | | One integer of the resonance. |
-| `res_k` | | The other integer of the resonance. |
-| `res_orbit` | | Description of the resonant orbit. |
+| `dyn_class` | | Population label from the table above. |
+| `T_earth` | | Tisserand parameter with respect to Earth. |
+| `T_mars` | | Tisserand parameter with respect to Mars. |
+| `T_jup` | | Tisserand parameter with respect to Jupiter. |
+| `T_nep` | | Tisserand parameter with respect to Neptune. |
+| `flag_resonant` | | 1 if `a` lies in a Jupiter resonance window, otherwise 0. |
+| `resonant_ratio` | | Resonance ratio, empty when `flag_resonant` is 0. |
+
+-----
+[MVROC Team](https://github.com/seap-udea/MVROC) (2026-present)
