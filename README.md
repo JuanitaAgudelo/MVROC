@@ -44,21 +44,33 @@ The public table is [mvroc.csv](mvroc.csv): 1 092 solutions, 99 columns, 703 a
 
 | Path | Role |
 |---|---|
-| [`pipeline/inputs/`](pipeline/inputs/) | Raw downloaded inputs (Rubin MPC observation tables) |
-| [`products/`](products/) | Pipeline data products and the public catalogue join |
 | [`pipeline/`](pipeline/) | Stage drivers (`periodograms.py`, `foldings.py`, …), `inputs/`, and `outputs/` |
+| [`pipeline/QUICKSTART.md`](pipeline/QUICKSTART.md) | Fresh-clone setup and how to run the pipeline drivers |
+| [`pipeline/inputs/`](pipeline/inputs/) | Raw downloads (obs parquet, MPCORB, …) |
+| [`products/`](products/) | Pipeline data products and the public catalogue join |
 | [`mvroc.csv`](mvroc.csv) | Symlink to [`products/mvroc.csv`](products/mvroc.csv) |
 
-Pipeline scripts run with cwd = `pipeline/` and read `inputs/`, `../products/`, and write `outputs/`.
+Pipeline scripts run with cwd = `pipeline/` and read `inputs/`, `../products/`, and write `outputs/`. New clone: start with [`pipeline/QUICKSTART.md`](pipeline/QUICKSTART.md).
 
 ## Inputs
 
-Raw observation tables live under [`pipeline/inputs/`](pipeline/inputs/). Large parquet files are kept outside git (see [Google Drive](https://drive.google.com/drive/folders/1l99VF8mxHfaqc82aR4SSCKunrfRnXzCZ?usp=sharing)); the repo stores symlinks when the files sit under `code/data/`.
+Raw downloads live under [`pipeline/inputs/`](pipeline/inputs/). Large files are kept outside git (see [Google Drive](https://drive.google.com/drive/folders/1l99VF8mxHfaqc82aR4SSCKunrfRnXzCZ?usp=sharing) for the observation parquet); the repo may store local symlinks when the files sit under `code/data/`.
 
-| File | Format | Rows | Role |
-|---|---|---:|---|
-| `obs_sbn_X05_full.parquet` | Parquet | 8 078 546 | Original Rubin MPC observations (12 October 2026) |
-| `obs_sbn_X05_full_mpc_desig.parquet` | Parquet | | Same table with MPC designations attached (used by the historical monolith) |
+| File | Format | Role |
+|---|---|---|
+| `obs_sbn_X05_full.parquet` | Parquet | Original Rubin MPC observations (12 October 2026; 8 078 546 rows) |
+| `mpcorb_extended.dat.gz` | gzip text | MPCORB extended orbital elements (Minor Planet Center) |
+
+Download from `pipeline/` (preferred):
+
+```bash
+cd pipeline
+make install
+make get_gdrive_data
+```
+
+Details: [`pipeline/QUICKSTART.md`](pipeline/QUICKSTART.md) and
+[`pipeline/PATTERN.md`](pipeline/PATTERN.md) (section **Getting the data**).
 
 ## Pipeline products
 
@@ -147,3 +159,6 @@ Portions of the code review, refactoring, inline documentation, debugging, and r
 The human authors assert that all scientific ideas, the overall project conception, the design of the numerical and scientific experiments, the interpretation of the results, and the conclusions drawn from this catalogue are original contributions of the human authors. AI tools were used exclusively as coding and writing assistants — analogous to a spell-checker or a compiler — and bear no intellectual authorship over the scientific content of this work. AI models also assisted with translation from Spanish (the native language of several authors) into English, and with English spelling and grammar review.
 
 MIT License — Zuluaga, Agudelo, Pan, Burgoa, Gutierrez & Bernardinelli (2026).
+
+-----
+[MVROC Team](https://github.com/seap-udea/MVROC) (2026-present)

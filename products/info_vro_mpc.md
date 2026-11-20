@@ -48,3 +48,6 @@ Objects with ≥2 Rubin provids (from the curated list): 2989.
 | 2000 OG62 | 2000 OG62, 2025 PX119 | 34 |
 | 2000 OO66 | 2000 OO66, 2025 MO64 | 273 |
 | … | (2964 more rows) | |
+
+-----
+[MVROC Team](https://github.com/seap-udea/MVROC) (2026-present)

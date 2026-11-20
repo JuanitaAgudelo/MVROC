@@ -1343,11 +1343,11 @@ def plot_phase_allbands(
         return path
     t0 = fit["t_band"].min()
     if freq_sel is None:
-        freq_sel = fit["freq_sel"]
+    freq_sel = fit["freq_sel"]
     if per_sel is None:
-        per_sel = fit["per_sel"]
+    per_sel = fit["per_sel"]
     if source is None:
-        source = fit.get("period_source") or f"Periodogram {fit.get('band', BAND)}"
+    source = fit.get("period_source") or f"Periodogram {fit.get('band', BAND)}"
     present = [
         b for b in ALL_BANDS if b not in ("u", "Lu") and (df_obj["band"] == b).any()
     ]
@@ -5659,10 +5659,10 @@ def process(
                     and "chi2_nu" in df_csv.columns
                 )
             else:
-                csv_ok = (provid in df_csv["provid"].values) and (
-                    "epoch_utc_ini" in df_csv.columns
+            csv_ok = (provid in df_csv["provid"].values) and (
+                "epoch_utc_ini" in df_csv.columns
                     and "obs_duration" in df_csv.columns
-                )
+            )
             requested = BAND if band is None or str(band).strip() == "" else str(band).strip()
             if (
                 csv_ok
@@ -5748,7 +5748,7 @@ def process(
                         .str.contains(r"(?:^|,)z(?:,|$)", regex=True, na=False)
                     )
                     if bool(listed_z.any()) and not bool(sub.loc[listed_z, "i-z"].notna().any()):
-                        csv_ok = False
+                    csv_ok = False
         except Exception:
             csv_ok = False
 
@@ -5862,7 +5862,7 @@ def process(
                 )
                 if wdem is not None:
                     fit["democratic_weighted"] = wdem
-            if "phase" in analysis:
+                    if "phase" in analysis:
                 written.append(
                     plot_phase_allbands(
                         df_obj,
@@ -6033,28 +6033,28 @@ def process(
                 or adopted is not None
             ):
                 stale = []
-                if "phase_model" in analysis:
-                    stale.append(output_path("phase_model", provid))
-                if "timemodel" in analysis:
-                    stale.append(output_path("timemodel", provid))
+                    if "phase_model" in analysis:
+                        stale.append(output_path("phase_model", provid))
+                    if "timemodel" in analysis:
+                        stale.append(output_path("timemodel", provid))
                 if "timemodel_Lk" in analysis:
                     stale.append(output_path("timemodel_Lk", provid))
-                if "shape_fit" in analysis:
-                    stale.extend(
-                        [
-                            output_path("spheres", provid),
-                            output_path("ellipsoid", provid),
-                        ]
-                    )
-                if "literature" in analysis:
-                    stale.append(output_path("literature", provid))
-                if "multiband_photometry" in analysis:
-                    stale.append(output_path("multiband_phase_model", provid))
-                if "shape_fit_multiband" in analysis:
-                    stale.append(output_path("shape_multiband", provid))
-                for stale_path in stale:
-                    if stale_path.exists():
-                        stale_path.unlink()
+                    if "shape_fit" in analysis:
+                        stale.extend(
+                            [
+                                output_path("spheres", provid),
+                                output_path("ellipsoid", provid),
+                            ]
+                        )
+                    if "literature" in analysis:
+                        stale.append(output_path("literature", provid))
+                    if "multiband_photometry" in analysis:
+                        stale.append(output_path("multiband_phase_model", provid))
+                    if "shape_fit_multiband" in analysis:
+                        stale.append(output_path("shape_multiband", provid))
+                    for stale_path in stale:
+                        if stale_path.exists():
+                            stale_path.unlink()
             if "phase_model" in analysis:
                 written.append(Lr_phase_curve(provid, fit))
             if "shape_fit" in analysis:
@@ -8040,7 +8040,7 @@ def _main(t_start):
                     # One row per MVROC solution (fold ± shape; no lit panels).
                     peak_rows.extend(_moi_solution_result_rows(provid, fit))
                 else:
-                    peak_rows.append(row)
+                peak_rows.append(row)
             else:
                 failed[provid] = err or "Not enough data, or an error in the calculation"
 

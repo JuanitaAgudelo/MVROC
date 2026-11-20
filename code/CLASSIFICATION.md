@@ -142,3 +142,6 @@ def quality_score(tags: set[str]) -> int:
 ```
 
 Store on each SOL row: `tags` (glyph string) and `Q` (int 1–9).
+
+-----
+[MVROC Team](https://github.com/seap-udea/MVROC) (2026-present)

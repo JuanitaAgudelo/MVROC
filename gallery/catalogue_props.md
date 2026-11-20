@@ -24,3 +24,6 @@ The mean in each band is the average number of measurements among asteroids with
 | Inclination [deg] | 1.97 | 8.07 | 32.22 |
 | $H_r$ [mag] | 6.99 | 17.77 | 21.27 |
 | Rotation period [h] | 0.05 | 5.61 | 46.32 |
+
+-----
+[MVROC Team](https://github.com/seap-udea/MVROC) (2026-present)

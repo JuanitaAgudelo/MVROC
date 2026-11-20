@@ -1,9 +1,7 @@
 # MVROC pipeline driver pattern
 
-How to write a stage driver under `pipeline/`. Reference implementations:
-`mvroc.py`, `periodograms.py`, `foldings.py`, `solutions.py`.
-
-When this document and the code disagree, the code wins — then update this file.
+How to write a stage driver under `pipeline/`. Global variables and helpers of the pipeline: `mvroc.py` . Reference implementations:
+`periodograms.py`, `foldings.py`, `solutions.py`.
 
 ---
 
@@ -27,8 +25,9 @@ Always run with **cwd = `pipeline/`**. Paths are relative strings from there.
 
 ```text
 pipeline/                       # cwd for every driver
-  inputs/                       # raw downloads (obs tables)
-    obs_sbn_X05_full.parquet
+  inputs/                       # raw downloads (not committed to git)
+    obs_sbn_X05_full.parquet    # Rubin MPC observations
+    mpcorb_extended.dat.gz      # MPCORB extended (MPC)
   outputs/                      # stage outputs only
     crossmatches/
     orbits/
@@ -47,11 +46,51 @@ pipeline/                       # cwd for every driver
 
 | Path from `pipeline/` | Constant in `mvroc.py` | Role |
 |-----------------------|------------------------|------|
-| `inputs/` | `INPUTS` | Raw observation tables |
+| `inputs/` | `INPUTS` | Raw downloads (obs + MPCORB) |
 | `outputs/` | `OUTPUTS` | Per-stage pipeline outputs |
 
 **Do not use** `pathlib.Path.resolve()`, `__file__`, or path helper wrappers
 (`set_fig_dir`, `results_path`, …).
+
+### Getting the data
+
+Large files are **gitignored**. From **`pipeline/`**:
+
+```bash
+cd pipeline
+make install
+make get_gdrive_data
+```
+
+**`make get_gdrive_data`** pulls the mirrored tree from
+[mvroc-pipeline-data](https://drive.google.com/drive/folders/1gddbkDYiGWRI4pVhKPfR5AGp5dNpTrBW?usp=drive_link)
+and **skips** paths that already exist locally:
+
+| Local path (under `pipeline/`) | Role |
+|--------------------------------|------|
+| `inputs/obs_sbn_X05_full.parquet` | Rubin MPC observations (X05) |
+| `inputs/mpcorb_extended.dat.gz` | MPCORB extended orbital elements |
+| `outputs/mois/mois.parquet` | MOI-filtered observations |
+| `outputs/states/states.parquet` | Geometry + absolute magnitude H |
+
+Share that Drive folder as *Anyone with the link / Viewer* so `gdown` can
+list and download it.
+
+**Optional — update public inputs only** (not part of a normal first setup).
+Use when refreshing obs / MPCORB from their public URLs:
+
+```bash
+make get_public_data
+```
+
+| Local path (under `pipeline/`) | Source |
+|--------------------------------|--------|
+| `inputs/obs_sbn_X05_full.parquet` | Asteroid Institute public bucket |
+| `inputs/mpcorb_extended.dat.gz` | Minor Planet Center |
+
+Also skips existing local files; delete them first to force a refresh.
+
+Column schemas: Appendix A.1–A.2 (inputs), A.5–A.6 (states / mois).
 
 ---
 
@@ -65,29 +104,48 @@ Before writing a driver, declare:
 2. **Upstream** — stage outputs (or `inputs/`) that must exist first.
 3. **Downstream** — stages that will read this stage later.
 
+### Photometry (shared join)
+
+Several photometric stages do **not** read `mois.parquet` alone. They call
+`mv.load_moi_photometry()`, which builds one light-curve table by joining:
+
+| Source | Path | Columns used |
+|--------|------|--------------|
+| MOI observations | `outputs/mois/mois.parquet` | `id`, `obstime`, `permid`, `provid`, `ra`, `dec`, `band`, `mag`, `rmsmag` |
+| Absolute mag / geometry | `outputs/states/states.parquet` | `id`, `H`, `provid_mpc` (join on `id`) |
+| Dual-provid aliases | `outputs/crossmatches/crossmatches.csv` | `provid_vro`, `provid_mpc` (merge aliases) |
+
+Result columns: `id`, `obstime`, `permid`, `provid`, `ra`, `dec`, `band`,
+`mag`, `rmsmag`, `H`, `provid_mpc`, `mpc_designation`, `night`.
+Bands are normalized to `Lu`/`Lg`/`Lr`/`Li`/`Lz`/`Ly`. See Appendix A.9.
+
+In this document, **photometry** always means that join — never a free-standing
+file named `photometry.*`.
+
 ### Current stage order
 
-| Order | Stage | Writes | Upstream |
-|------:|-------|--------|----------|
-| 0 | seed | `inputs/` (raw obs downloads) | external downloads |
-| 1 | `crossmatches` | `outputs/crossmatches/crossmatches.csv` | `inputs/` + MPC |
-| 2 | `orbits` | `outputs/orbits/orbits.csv` | crossmatches |
-| 3 | `states` | `outputs/states/states.parquet` | orbits + observations |
-| 4 | `mois` | `outputs/mois/mois.parquet` | states (MOI filter) |
-| 5 | `periodograms` | `outputs/periodograms/` | mois + states + crossmatches |
-| 6 | `foldings` | `outputs/foldings/` | periodograms + photometry |
-| 7 | `mocs` | `outputs/mocs/mocs.csv` | foldings (visual / selected periods) |
-| 8 | `solutions` | `outputs/solutions/` | mocs + photometry |
-| 9 | shapefit | (future) | solutions |
+| Order | Stage | Upstream (exact paths) | Writes |
+|------:|-------|------------------------|--------|
+| 0 | seed | external downloads (see **Getting the data** above) | `inputs/obs_sbn_X05_full.parquet`, `inputs/mpcorb_extended.dat.gz` |
+| 1 | `crossmatches` | `inputs/obs_sbn_X05_full.parquet`, `inputs/mpcorb_extended.dat.gz` | `outputs/crossmatches/crossmatches.csv` |
+| 2 | `orbits` | `outputs/crossmatches/crossmatches.csv`, `inputs/mpcorb_extended.dat.gz` | `outputs/orbits/orbits.csv` |
+| 3 | `states` | `outputs/orbits/orbits.csv`, `inputs/obs_sbn_X05_full.parquet` | `outputs/states/states.parquet` |
+| 4 | `mois` | `outputs/states/states.parquet` (+ MOI filter on obs) | `outputs/mois/mois.parquet` |
+| 5 | `periodograms` | photometry = mois + states + crossmatches | `outputs/periodograms/periodograms.csv`, `*_periodogram.webp`, `periodograms.log` |
+| 6 | `foldings` | `outputs/periodograms/periodograms.csv` + photometry | `outputs/foldings/foldings.csv`, `*_folding.webp`, `foldings.log` |
+| 7 | `mocs` | `outputs/foldings/foldings.csv` (visual / selected periods) | `outputs/mocs/mocs.csv` |
+| 8 | `solutions` | `outputs/mocs/mocs.csv` + photometry | `outputs/solutions/solutions.csv`, `*_solution.webp`, `solutions.log` |
+| 9 | shapefit | `outputs/solutions/solutions.csv` | (future) |
 
 Until early-stage drivers exist, their outputs may be **simulated** under
 `outputs/<stage>/` (see current `crossmatches`, `orbits`, `states`, `mois`,
-`mocs`).
+`mocs`). Column schemas still apply (Appendix A).
 
 ### Rules
 
-- Read earlier stage results from `outputs/<upstream>/`.
-- Read raw observations from `inputs/` (via `mv.OBSERVATIONS_PARQUET` when needed).
+- Read earlier stage results from the **exact** upstream paths above.
+- Read raw downloads from `inputs/` when needed
+  (`mv.OBSERVATIONS_PARQUET`, and later MPCORB for orbits / crossmatches).
 - Do **not** reimplement an upstream stage inside a later driver.
 - If an upstream file is missing, exit with a clear message.
 - Document Inputs / Outputs (including upstream paths) in the driver docstring.
@@ -100,22 +158,36 @@ inputs → crossmatches → orbits → states → mois
   → periodograms → foldings → mocs → solutions → shapefit
 ```
 
+**`periodograms.py`** reads photometry via `mv.load_moi_photometry()` and writes:
+
+- `outputs/periodograms/periodograms.csv` (one row per asteroid)
+- `outputs/periodograms/<provid>_periodogram.webp`
+- `outputs/periodograms/periodograms.log`
+
 **`foldings.py`** reads:
 
-- `outputs/periodograms/periodograms.csv` (voted periods)
-- photometry via `mv.load_moi_photometry()` (mois + states + crossmatches)
+- `outputs/periodograms/periodograms.csv` (`periods_dem_h` vote tokens)
+- photometry via `mv.load_moi_photometry()`
 
-and writes only under `outputs/foldings/`.
+and writes:
+
+- `outputs/foldings/foldings.csv` (one row per plotted two-peak solution)
+- `outputs/foldings/<provid>_folding.webp`
+- `outputs/foldings/foldings.log`
 
 **`mocs`** (future driver) selects which folded periods are retained after
 visual review and writes `outputs/mocs/mocs.csv`.
 
 **`solutions.py`** reads:
 
-- `outputs/mocs/mocs.csv` (retained solution ids and periods)
+- `outputs/mocs/mocs.csv` (`solutions`, `periods_h`)
 - photometry via `mv.load_moi_photometry()`
 
-and writes only under `outputs/solutions/`.
+and writes:
+
+- `outputs/solutions/solutions.csv` (one row per retained solution)
+- `outputs/solutions/<provid>_solution.webp`
+- `outputs/solutions/solutions.log`
 
 ---
 
@@ -158,6 +230,8 @@ INPUTS = "inputs"
 OUTPUTS = "outputs"
 
 OBSERVATIONS_PARQUET = "inputs/obs_sbn_X05_full.parquet"
+# MPCORB (when orbits / crossmatches drivers need it):
+# inputs/mpcorb_extended.dat.gz
 
 CROSSMATCHES_CSV = "outputs/crossmatches/crossmatches.csv"
 ORBITS_CSV = "outputs/orbits/orbits.csv"
@@ -170,7 +244,9 @@ Photometry for photometric stages is loaded once with:
 
 ```python
 df = mv.load_moi_photometry()
-# joins outputs/mois + outputs/states + outputs/crossmatches
+# joins mois.parquet + states.parquet + crossmatches.csv
+# -> id, obstime, permid, provid, ra, dec, band, mag, rmsmag,
+#    H, provid_mpc, mpc_designation, night
 ```
 
 ---
@@ -327,7 +403,7 @@ if target.lower() != "all":
 ```
 
 - No argparse.
-- No force / fig-dir / dead flags from the monolith.
+- No force / fig-dir / dead flags.
 - If a parameter is almost always the same value, hard-code a constant.
 - `qplot=True` is fine when it separates science from plotting.
 
@@ -477,10 +553,9 @@ def mvroc_solutions():
     Inputs
     ------
     outputs/mocs/mocs.csv
-        Retained solution ids and periods.
-    outputs/mois/mois.parquet, outputs/states/states.parquet,
-    outputs/crossmatches/crossmatches.csv
-        MOI photometry with H (via mv.load_moi_photometry).
+        Retained solution ids and periods (columns solutions, periods_h).
+    Photometry via mv.load_moi_photometry()
+        Join of mois.parquet + states.parquet + crossmatches.csv.
 
     Outputs
     -------
@@ -499,34 +574,13 @@ def mvroc_solutions():
 
 ---
 
-## 13. Porting from `catalogue_pipeline.py`
-
-1. Locate the monolith function and the private helpers only it uses.
-2. List real data dependencies (columns, upstream outputs, inputs).
-3. Extract the minimum science. Drop:
-   - complex argparse / force / skip-by-figure-existence
-   - incidental observations CSV writes
-   - absolute Path resolve
-   - dead or nearly unused parameters
-   - neighboring stage code
-4. Rewrite in this pattern.
-5. Smoke-test:
-
-```bash
-cd pipeline
-python <stage>.py "1981 US22"
-```
-
-6. Check: CSV append, figure (if any), log, and skip on re-run.
-
----
-
-## 14. Checklist before merge
+## 13. Checklist before merge
 
 - [ ] Lives in `pipeline/<stage>.py`
 - [ ] Runs from `pipeline/`
 - [ ] Upstream / Downstream declared
 - [ ] Reads `outputs/<upstream>/` and/or `inputs/` as documented
+- [ ] Does not commit large `inputs/` files (see `.gitignore`)
 - [ ] Writes only `outputs/<stage>/`
 - [ ] Entry point `mvroc_<stage>()`; stage helpers in the same file
 - [ ] CLI: `provid | all`
@@ -540,18 +594,249 @@ python <stage>.py "1981 US22"
 
 ---
 
-## 15. Agent request template
+## Appendix A. Files and columns
 
-```text
-Convert procedure <NAME_IN_catalogue_pipeline.py> into a new pipeline driver
-following pipeline/PATTERN.md and the style of pipeline/periodograms.py +
-pipeline/mvroc.py.
+Paths relative to `pipeline/`. Schemas match the current simulated or real
+stage products. Color columns use LSST letters `u,g,r,i,z,y` (not `Lu`…).
 
-Stage name: <stage>
-Upstream: <earlier outputs / inputs>
-Downstream: <who consumes this next>
+### A.0 Color-column set (shared)
 
-Scope: only <short list of functions / steps>.
-Do not port <neighboring steps>.
-Smoke-test with provid "1981 US22".
-```
+Used at the end of `foldings.csv` and `solutions.csv`. For every unordered
+pair of filters in `(u, g, r, i, z, y)`:
+
+| Column | Meaning |
+|--------|---------|
+| `<f1>-<f2>` | Mean color in magnitudes (NaN if either band missing) |
+| `<f1>-<f2>_err` | Uncertainty on that color |
+
+Pairs in order: `u-g`, `u-r`, `u-i`, `u-z`, `u-y`, `g-r`, `g-i`, `g-z`,
+`g-y`, `r-i`, `r-z`, `r-y`, `i-z`, `i-y`, `z-y` (30 columns total).
+
+---
+
+### A.1 `inputs/obs_sbn_X05_full.parquet`
+
+Rubin / Asteroid Institute MPC observations for station X05. Full ADPACS-like
+observation schema (~90 columns). Photometric stages care about:
+
+| Column | Meaning |
+|--------|---------|
+| `id` | Observation id (join key to states) |
+| `provid` | Provisional / VRO designation |
+| `permid` | Permanent number if numbered |
+| `obstime` | Observation epoch |
+| `ra`, `dec` | Sky position |
+| `mag`, `rmsmag` | Apparent magnitude and error |
+| `band` | Filter letter (`u`/`g`/`r`/`i`/`z`/`y` or `Lu`…) |
+| `stn` | Observatory code (`X05`) |
+
+Download: **Getting the data** (section 2) — `make get_gdrive_data`
+(optional public refresh: `make get_public_data`).
+
+---
+
+### A.2 `inputs/mpcorb_extended.dat.gz`
+
+MPCORB extended orbital-element file from the Minor Planet Center (gzip text).
+Used by `crossmatches` / `orbits` (not by photometric stages). Not a CSV;
+parse with the MPCORB format. Download: **Getting the data** (section 2) —
+`make get_gdrive_data` (optional: `make get_public_data`).
+
+---
+
+### A.3 `outputs/crossmatches/crossmatches.csv`
+
+VRO ↔ MPC designation map. One row per matched object.
+
+| Column | Meaning |
+|--------|---------|
+| `provid_vro` | VRO / provisional name used in observations |
+| `provid_mpc` | MPC designation string |
+| `permid` | Permanent number (integer when numbered) |
+| `match_kind` | How the match was made (e.g. `numbered`) |
+| `n_vro_for_mpc` | How many VRO names map to this MPC object |
+
+---
+
+### A.4 `outputs/orbits/orbits.csv`
+
+Orbital elements for matched objects. One row per object.
+
+| Column | Meaning |
+|--------|---------|
+| `provid_vro` | VRO designation |
+| `provid_mpc` | MPC designation |
+| `permid` | Permanent number |
+| `epoch_tdb` | Element epoch (TDB string) |
+| `a` | Semi-major axis (au) |
+| `e` | Eccentricity |
+| `q` | Perihelion distance (au) |
+| `incl` | Inclination (deg) |
+| `node` | Longitude of ascending node (deg) |
+| `peri` | Argument of perihelion (deg) |
+| `M` | Mean anomaly (deg) |
+
+---
+
+### A.5 `outputs/states/states.parquet`
+
+Per-observation geometric state and absolute magnitude. One row per
+observation id.
+
+| Column | Meaning |
+|--------|---------|
+| `id` | Observation id (join to mois / obs) |
+| `provid_vro` | VRO designation |
+| `provid_mpc` | MPC designation |
+| `permid` | Permanent number (nullable) |
+| `obstime` | Observation epoch |
+| `obs_et` | Ephemeris time (s) |
+| `deltat` | Light-time correction (s) |
+| `r` | Heliocentric distance (au) |
+| `delta` | Topocentric distance (au) |
+| `alpha` | Phase angle (deg) |
+| `mag` | Apparent magnitude |
+| `H` | Absolute magnitude (reduced) |
+| `flag_updated` | State-update flag |
+
+`load_moi_photometry` takes `id`, `H`, `provid_mpc` from this file.
+
+---
+
+### A.6 `outputs/mois/mois.parquet`
+
+MOI-filtered observation subset. Same column layout as
+`obs_sbn_X05_full.parquet` (~90 ADPACS columns). Key columns for later stages:
+
+| Column | Meaning |
+|--------|---------|
+| `id` | Observation id |
+| `provid` | Designation used as asteroid key downstream |
+| `permid` | Permanent number (nullable) |
+| `obstime` | Observation epoch |
+| `ra`, `dec` | Sky position |
+| `mag`, `rmsmag` | Apparent magnitude and error |
+| `band` | Filter |
+
+`load_moi_photometry` reads the key set above, then joins states + crossmatches.
+
+---
+
+### A.7 `outputs/periodograms/periodograms.csv`
+
+Democratic period search. **One row per asteroid.**
+
+| Column | Meaning |
+|--------|---------|
+| `provid` | Asteroid name |
+| `epoch_utc_ini` | First observation UTC |
+| `epoch_utc_end` | Last observation UTC |
+| `obs_duration` | Span in days |
+| `n_obs` | Total points used |
+| `n_obs_u` … `n_obs_y` | Counts per LSST band |
+| `p_rot_dem_h` | Winning democratic rotation period (h) |
+| `votes_dem` | Votes for the winner |
+| `n_series_dem` | Number of series that cast votes |
+| `bands_dem` | Band / combo labels that voted (`Lr+Lg+…`) |
+| `periods_dem_h` | Vote tokens `label=period_h` joined by commas (input to foldings) |
+
+Also written under `outputs/periodograms/`:
+
+- `<provid>_periodogram.webp` — periodogram figure
+- `periodograms.log` — mirrored stdout
+
+---
+
+### A.8 `outputs/foldings/foldings.csv`
+
+Multiband two-peak folding of democratic candidates. **One row per plotted
+solution** (selected and other two-peak panels).
+
+| Column | Meaning |
+|--------|---------|
+| `provid` | Asteroid name |
+| `selected` | `1` if chosen as best folding, else `0` |
+| `p_rot_fold_h` | Folded rotation period (h) |
+| `chi2_nu` | Reduced chi-square of the harmonic fit |
+| `n_peaks` | Number of peaks in the folded curve |
+| `power` | Lomb–Scargle / fit power |
+| `amp_ratio` | Amplitude ratio diagnostic |
+| `amp_data` | Peak-to-peak amplitude of the data |
+| `span_alias` | `1` if period is a campaign-span alias, else `0` |
+| + A.0 | Color columns |
+
+Also written under `outputs/foldings/`:
+
+- `<provid>_folding.webp` — folding figure
+- `foldings.log` — mirrored stdout
+
+---
+
+### A.9 Photometry frame (`mv.load_moi_photometry()`)
+
+In-memory only (not written as a stage file). Built from A.6 + A.5 + A.3.
+
+| Column | Meaning |
+|--------|---------|
+| `id` | Observation id |
+| `obstime` | datetime |
+| `permid` | Permanent number (nullable) |
+| `provid` | Canonical designation after dual-provid merge |
+| `ra`, `dec` | Sky position (deg) |
+| `band` | Normalized `Lu`/`Lg`/`Lr`/`Li`/`Lz`/`Ly` |
+| `mag` | Apparent magnitude |
+| `rmsmag` | Magnitude error (floored at `MIN_MAG_ERROR`) |
+| `H` | Absolute magnitude from states |
+| `provid_mpc` | MPC designation from states |
+| `mpc_designation` | Cleaned MPC string (nullable) |
+| `night` | `obstime` floored to calendar day |
+
+---
+
+### A.10 `outputs/mocs/mocs.csv`
+
+Visually retained folding solutions. **One row per asteroid.**
+
+| Column | Meaning |
+|--------|---------|
+| `provid` | Asteroid name |
+| `n_obs` | Observation count at selection time |
+| `n_solutions` | How many solutions were kept |
+| `solutions` | Slash-separated solution ids, e.g. `1` or `1/2` |
+| `periods_h` | Slash-separated periods (h), same order as `solutions` |
+| `p_rot_dem_h` | Democratic period from periodograms (context) |
+| `selection` | How it was chosen (e.g. `visual_folding`) |
+
+---
+
+### A.11 `outputs/solutions/solutions.csv`
+
+Final folded solutions for retained mocs periods. **One row per solution.**
+
+| Column | Meaning |
+|--------|---------|
+| `provid` | Asteroid name |
+| `solution_id` | Id from `mocs.solutions` |
+| `p_rot_h` | Rotation period (h) |
+| `chi2_nu` | Reduced chi-square |
+| `n_peaks` | Peaks in the folded curve |
+| `power` | Fit / periodogram power |
+| `amp` | Model amplitude |
+| `amp_ratio` | Amplitude ratio diagnostic |
+| `amp_data` | Peak-to-peak data amplitude |
+| `scatter` | Residual scatter |
+| `span_alias` | Campaign-span alias flag |
+| `alias_label` | Alias label if applicable (nullable) |
+| `filters` | Comma-separated filters used, e.g. `g,r,i` |
+| `n_filters` | Number of filters |
+| `ref_filter` | Reference filter for colors (usually `r`) |
+| `n_obs_u` … `n_obs_y` | Counts per band in the solution |
+| + A.0 | Color columns |
+
+Also written under `outputs/solutions/`:
+
+- `<provid>_solution.webp` — stacked folded panels
+- `solutions.log` — mirrored stdout
+
+-----
+[MVROC Team](https://github.com/seap-udea/MVROC) (2026-present)

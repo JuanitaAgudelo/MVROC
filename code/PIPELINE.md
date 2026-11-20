@@ -130,3 +130,6 @@ Un pipeline para el análisis fotométrico y dinámico de SB en la era de VRO
 12. Dinámica.
 
 13. Shape. Solo los de clase A y B.
+
+-----
+[MVROC Team](https://github.com/seap-udea/MVROC) (2026-present)

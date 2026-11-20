@@ -215,3 +215,6 @@ The planet distances used here are Earth 1.000 au, Mars 1.524 au, Jupiter 5.204 
 | `T_nep` | | Tisserand parameter with respect to Neptune. |
 | `flag_resonant` | | 1 if `a` lies in a Jupiter resonance window, otherwise 0. |
 | `resonant_ratio` | | Resonance ratio, empty when `flag_resonant` is 0. |
+
+-----
+[MVROC Team](https://github.com/seap-udea/MVROC) (2026-present)

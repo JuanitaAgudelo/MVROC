@@ -162,3 +162,6 @@ End product: **one row per solution**, with the object information joined onto e
 12. **SBDB** — `H_sbdb`, `H_sbdb_err`, `albedo_sbdb`, `albedo_sbdb_err`, `diameter_sbdb`, `diameter_sbdb_err`, `extent_sbdb`, `extent_sbdb_err`, `pole_sbdb`, `pole_sbdb_err`, `density_sbdb`, `density_sbdb_err`, `rot_per_sbdb`, `rot_per_sbdb_err`, `GM_sbdb`, `GM_sbdb_err`, `BV_sbdb`, `BV_sbdb_err`, `UB_sbdb`, `UB_sbdb_err`, `spec_B_sbdb`, `spec_B_sbdb_err`, `spec_T_sbdb`, `spec_T_sbdb_err`
 13. **Greenstreet** — `rot_per_lsm_gst`, `rot_per_fr_gst`
 14. **Dynamics** — `dyn_class`, `T_earth`, `T_mars`, `T_jup`, `T_nep`, `flag_resonant`, `resonant_ratio`
+
+-----
+[MVROC Team](https://github.com/seap-udea/MVROC) (2026-present)
