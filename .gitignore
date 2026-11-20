@@ -13,3 +13,4 @@ code/figures/figures_*
 **/gallapp/
 .venv/
 *.db
+code/juanita-taxonomy-legacy/
