@@ -1,0 +1,2 @@
+provid,epoch_utc_ini,epoch_utc_end,obs_duration,n_obs,n_obs_u,n_obs_g,n_obs_r,n_obs_i,n_obs_z,n_obs_y,p_rot_dem_h,votes_dem,n_series_dem,bands_dem,periods_dem_h
+1981 US22,2025-04-22 02:38:48,2025-05-04 04:49:49,12.090977962962963,670,140,166,220,144,0,0,2.9376616529333357,7,7,Lr+Lg+Li,"Lr=2.9377,Lg=2.7662,Li=2.9377,Lr+Lg=2.7662,Lr+Li=2.9377,Lg+Li=2.7662,Lr+Lg+Li=2.9377"

@@ -6,14 +6,22 @@ how many of those survive in figures/figures_MOI (MVROC objects of interest).
 Matching expands each provid with alt_designation (Greenstreet) and the
 two-provid pairs in rubin_objects_two_provids.csv.
 
+Also writes a period–period scatter of the MOI folding solutions
+(figures_MOI/solutions.csv) against the published value for every MOI
+asteroid that has both. One literature period can map to 1–3 (or more)
+MVROC solutions; those solutions are drawn at the same literature abscissa
+and joined by a thin vertical line. Marker colour encodes the absolute
+magnitude H_r.
+
 Run from code/:
 
     python mvroc_literature_comparison.py
     python mvroc_literature_comparison.py --n-min 50
 
 Writes figures/figures_MOI/literature_comparison_stats.csv with the summary
-counts used in the photometry manuscript (Table tab:literature), and
-code/mvroc_literature_comparison.log with the full text report.
+counts used in the photometry manuscript (Table tab:literature),
+code/mvroc_literature_comparison.log with the full text report, and
+test_dev/paper_workshop_LSST/figs/mvroc_vs_literature_periods.png for the paper.
 """
 
 from __future__ import annotations
@@ -23,6 +31,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
@@ -33,10 +46,15 @@ import catalogue_pipeline as cp  # noqa: E402
 DATA_DIR = ROOT / "data"
 MOI_DIR = ROOT / "figures" / "figures_MOI"
 MOI_CSV = MOI_DIR / "asteroid_selection.csv"
+MOI_SOLUTIONS = MOI_DIR / "solutions.csv"
 TWOPROV_CSV = DATA_DIR / "rubin_objects_two_provids.csv"
 OUT_CSV = MOI_DIR / "literature_comparison_stats.csv"
 OUT_LOG = ROOT / "mvroc_literature_comparison.log"
-DEFAULT_N_MIN = 50
+PAPER_FIGS = ROOT / "test_dev" / "paper_workshop_LSST" / "figs"
+PERIOD_FIG = PAPER_FIGS / "mvroc_vs_literature_periods.png"
+PERIOD_CSV = MOI_DIR / "mvroc_vs_literature_periods.csv"
+DEFAULT_N_MIN = 100
+DPI = 150
 
 
 class _Tee:
@@ -102,10 +120,15 @@ def _in_moi(names: set[str], moi_expanded: set[str], moi_provids: set[str]) -> b
     return any((n in moi_expanded) or (n in moi_provids) for n in names)
 
 
-def compute_stats(n_min: int = DEFAULT_N_MIN, moi_csv: Path = MOI_CSV):
+def compute_stats(
+    n_min: int = DEFAULT_N_MIN,
+    moi_csv: Path = MOI_CSV,
+    solutions_csv: Path = MOI_SOLUTIONS,
+):
     """Return (summary DataFrame, detail dict) for the literature cross-match."""
-    if not moi_csv.exists():
-        raise SystemExit(f"Missing MOI selection: {moi_csv}")
+    moi_list = solutions_csv if solutions_csv.exists() else moi_csv
+    if not moi_list.exists():
+        raise SystemExit(f"Missing MOI list: {moi_list}")
 
     paper = cp.load_rotation_catalog()
     sbdb = cp.load_sbdb_rotation_periods()
@@ -118,8 +141,9 @@ def compute_stats(n_min: int = DEFAULT_N_MIN, moi_csv: Path = MOI_CSV):
     obs_counts = cp.observation_counts(df_set).set_index("provid")["n_obs"]
     obs_counts.index = obs_counts.index.astype(str)
 
-    moi = pd.read_csv(moi_csv)
+    moi = pd.read_csv(moi_list)
     moi_provids = set(moi["provid"].astype(str).str.strip())
+    print(f"MOI list: {moi_list} ({len(moi_provids)} asteroids)")
     moi_expanded: set[str] = set()
     for p in moi_provids:
         moi_expanded |= _expand(p, alias_map)
@@ -238,6 +262,319 @@ def compute_stats(n_min: int = DEFAULT_N_MIN, moi_csv: Path = MOI_CSV):
         "moi_literature": moi_lit,
     }
     return summary, detail
+
+
+def _positive(value) -> float | None:
+    number = pd.to_numeric(value, errors="coerce")
+    if pd.isna(number) or float(number) <= 0:
+        return None
+    return float(number)
+
+
+def _literature_match_for_names(
+    names: set[str], lit_entries: list[dict]
+) -> tuple[float, str, str] | None:
+    """Preferred published period for an identity set, or None."""
+    matches = []
+    for entry in lit_entries:
+        if not (names & entry["names"]):
+            continue
+        if entry["period_lsm_hr"] is not None:
+            matches.append(
+                (entry["period_lsm_hr"], "Greenstreet LSM", "Greenstreet")
+            )
+        elif entry["period_fourier_hr"] is not None:
+            matches.append(
+                (
+                    entry["period_fourier_hr"],
+                    "Greenstreet Fourier",
+                    "Greenstreet",
+                )
+            )
+        elif entry["period_sbdb_hr"] is not None:
+            matches.append((entry["period_sbdb_hr"], "SBDB", "SBDB"))
+    if not matches:
+        return None
+    matches.sort(key=lambda item: 0 if item[2] == "Greenstreet" else 1)
+    return matches[0]
+
+
+def build_period_pairs(
+    moi_csv: Path = MOI_CSV,
+    solutions_csv: Path = MOI_SOLUTIONS,
+) -> pd.DataFrame:
+    """MOI folding solutions paired with Greenstreet / SBDB published periods.
+
+    Reads ``figures_MOI/solutions.csv`` (one row per MOI asteroid, with 1–N
+    slash-separated periods). Each solution becomes its own pair against the
+    same published period. Literature preference is Greenstreet Lomb–Scargle,
+    then Greenstreet Fourier, then SBDB ``rot_per``. Matching is alias-aware,
+    as in ``compute_stats``.
+    """
+    if not solutions_csv.exists():
+        raise SystemExit(f"Missing MOI folding solutions: {solutions_csv}")
+
+    solutions = cp.load_moi_solutions(solutions_csv)
+    alias_map = _load_alias_map(TWOPROV_CSV)
+    paper = cp.load_rotation_catalog()
+    paper["provid"] = paper["provid"].astype(str).str.strip()
+    sbdb = cp.load_sbdb_rotation_periods()
+    sbdb["provid"] = sbdb["provid"].astype(str).str.strip()
+
+    source_by_provid: dict[str, str] = {}
+    if moi_csv.exists():
+        moi_meta = pd.read_csv(moi_csv)
+        moi_meta["provid"] = moi_meta["provid"].astype(str).str.strip()
+        if "source" in moi_meta.columns:
+            source_by_provid = dict(
+                zip(moi_meta["provid"], moi_meta["source"].astype(str))
+            )
+
+    lit_entries: list[dict] = []
+    for _, row in paper.iterrows():
+        names = {str(row["provid"]).strip()}
+        alt = row.get("alt_designation")
+        if pd.notna(alt) and str(alt).strip():
+            names.add(str(alt).strip())
+        all_names: set[str] = set()
+        for name in names:
+            all_names |= _expand(name, alias_map)
+        lit_entries.append(
+            {
+                "names": all_names,
+                "period_lsm_hr": _positive(row.get("period_lsm_hr")),
+                "period_fourier_hr": _positive(row.get("period_fourier_hr")),
+                "period_sbdb_hr": None,
+                "catalog": "Greenstreet",
+            }
+        )
+    for _, row in sbdb.iterrows():
+        lit_entries.append(
+            {
+                "names": _expand(str(row["provid"]).strip(), alias_map),
+                "period_lsm_hr": None,
+                "period_fourier_hr": None,
+                "period_sbdb_hr": _positive(row.get("period_sbdb_hr")),
+                "catalog": "SBDB",
+            }
+        )
+
+    h_by_provid: dict[str, float] = {}
+    colors_path = DATA_DIR / "colors.parquet"
+    if colors_path.exists():
+        colors = pd.read_parquet(colors_path, columns=["provid", "H_r", "H_g"])
+        colors["provid"] = colors["provid"].astype(str).str.strip()
+        for _, row in colors.iterrows():
+            h = row.get("H_r")
+            if pd.isna(h):
+                h = row.get("H_g")
+            if pd.notna(h):
+                h_by_provid[str(row["provid"]).strip()] = float(h)
+    # Fallbacks: Greenstreet H_mag, then SBDB H.
+    if "H_mag" in paper.columns:
+        for _, row in paper.iterrows():
+            provid = str(row["provid"]).strip()
+            if provid in h_by_provid:
+                continue
+            h = _positive(row.get("H_mag"))
+            if h is not None:
+                h_by_provid[provid] = h
+                alt = row.get("alt_designation")
+                if pd.notna(alt) and str(alt).strip():
+                    h_by_provid.setdefault(str(alt).strip(), h)
+    sbdb_phys = DATA_DIR / "sbdb_physical_properties.csv"
+    if sbdb_phys.exists():
+        raw = pd.read_csv(sbdb_phys, usecols=["provid", "parameter", "value"], low_memory=False)
+        raw = raw[raw["parameter"].astype(str).str.strip() == "H"]
+        for _, row in raw.iterrows():
+            provid = str(row["provid"]).strip()
+            if provid in h_by_provid:
+                continue
+            h = pd.to_numeric(row.get("value"), errors="coerce")
+            if pd.notna(h):
+                h_by_provid[provid] = float(h)
+
+    rows = []
+    for _, sol_row in solutions.iterrows():
+        provid = str(sol_row["provid"]).strip()
+        names = _expand(provid, alias_map)
+        matched = _literature_match_for_names(names, lit_entries)
+        if matched is None:
+            continue
+        p_lit, lit_label, catalog = matched
+        h_val = h_by_provid.get(provid)
+        if h_val is None:
+            for name in names:
+                if name in h_by_provid:
+                    h_val = h_by_provid[name]
+                    break
+        sol_periods = list(cp._moi_solution_periods(sol_row))
+        n_sol = len(sol_periods)
+        for sol_id, p_mvroc in sol_periods:
+            rows.append(
+                {
+                    "provid": provid,
+                    "solution": str(sol_id),
+                    "n_solutions": n_sol,
+                    "p_mvroc_h": float(p_mvroc),
+                    "p_literature_h": float(p_lit),
+                    "literature_label": lit_label,
+                    "literature_catalog": catalog,
+                    "mvroc_kind": f"solution_{sol_id}",
+                    "source": source_by_provid.get(provid, ""),
+                    "H_r": h_val if h_val is not None else np.nan,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def plot_mvroc_vs_literature_periods(
+    pairs: pd.DataFrame,
+    out_path: Path = PERIOD_FIG,
+) -> Path | None:
+    """Scatter MOI folding solutions against published periods (log–log).
+
+    Two side-by-side panels: Greenstreet (left) and SBDB (right). Multiple
+    MVROC solutions for the same asteroid share the literature abscissa and
+    are joined by a thin vertical line. Marker colour encodes H_r.
+    """
+    if pairs is None or pairs.empty:
+        print("  no MVROC–literature period pairs to plot")
+        return None
+
+    plot = pairs.copy()
+    if "H_r" not in plot.columns:
+        plot["H_r"] = np.nan
+    plot["H_r"] = pd.to_numeric(plot["H_r"], errors="coerce")
+
+    x_all = plot["p_literature_h"].to_numpy(dtype=float)
+    y_all = plot["p_mvroc_h"].to_numpy(dtype=float)
+    h_all = plot["H_r"].to_numpy(dtype=float)
+    n_asteroids = int(plot["provid"].nunique())
+    lo = float(min(x_all.min(), y_all.min()) * 0.7)
+    hi = float(max(x_all.max(), y_all.max()) * 1.4)
+    lo = max(lo, 0.1)
+    line = np.array([lo, hi])
+
+    panels = (
+        ("Greenstreet", "o", "Greenstreet et al. (2026)"),
+        ("SBDB", "s", "SBDB"),
+    )
+    h_finite = h_all[np.isfinite(h_all)]
+    if len(h_finite) == 0:
+        h_vmin, h_vmax = 14.0, 20.0
+    else:
+        h_vmin = float(np.nanpercentile(h_finite, 5))
+        h_vmax = float(np.nanpercentile(h_finite, 95))
+        if h_vmax <= h_vmin:
+            h_vmax = h_vmin + 1.0
+    cmap = plt.cm.viridis_r
+    marker_size = 42.0
+    fig = plt.figure(figsize=(12.4, 6.4))
+    axes = [
+        fig.add_subplot(1, 2, 1),
+        fig.add_subplot(1, 2, 2, sharex=None, sharey=None),
+    ]
+    axes[1].sharex(axes[0])
+    axes[1].sharey(axes[0])
+    scatters = []
+
+    for iax, (ax, (catalog, marker, title)) in enumerate(zip(axes, panels)):
+        part = plot[plot["literature_catalog"].astype(str) == catalog]
+        x = part["p_literature_h"].to_numpy(dtype=float)
+        y = part["p_mvroc_h"].to_numpy(dtype=float)
+        h = part["H_r"].to_numpy(dtype=float)
+        n_obj = int(part["provid"].nunique()) if not part.empty else 0
+        n_sol = len(part)
+
+        for _, group in part.groupby("provid", sort=False):
+            if len(group) < 2:
+                continue
+            g = group.sort_values("p_mvroc_h")
+            ax.plot(
+                g["p_literature_h"].to_numpy(dtype=float),
+                g["p_mvroc_h"].to_numpy(dtype=float),
+                color="0.55",
+                lw=0.8,
+                alpha=0.45,
+                zorder=2.5,
+                solid_capstyle="round",
+            )
+
+        has_h = np.isfinite(h)
+        if np.any(has_h):
+            sc = ax.scatter(
+                x[has_h],
+                y[has_h],
+                s=marker_size,
+                c=h[has_h],
+                cmap=cmap,
+                vmin=h_vmin,
+                vmax=h_vmax,
+                marker=marker,
+                zorder=3,
+                edgecolors="0.15",
+                linewidths=0.45,
+                alpha=0.9,
+            )
+            scatters.append(sc)
+        if np.any(~has_h):
+            ax.scatter(
+                x[~has_h],
+                y[~has_h],
+                s=marker_size,
+                color="0.65",
+                marker=marker,
+                zorder=2.8,
+                edgecolors="0.15",
+                linewidths=0.45,
+                alpha=0.85,
+            )
+
+        ax.plot(line, line, color="0.45", lw=1.2, label="1:1", zorder=2)
+        ax.plot(line, 2.0 * line, color="C1", lw=1, ls="--", label="2:1", zorder=2)
+        ax.plot(line, 0.5 * line, color="C2", lw=1, ls="--", label="1:2", zorder=2)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(lo, hi)
+        ax.set_xlabel(r"Literature $P_{\mathrm{rot}}$ [h]")
+        ax.grid(True, which="both", alpha=0.3)
+        ax.set_box_aspect(1)
+
+        if iax == 0:
+            ax.legend(loc="upper left", frameon=True, fontsize=7.5)
+
+        ax.text(
+            0.5,
+            1.03,
+            f"{title} ({n_obj} objects, {n_sol} solutions)",
+            transform=ax.transAxes,
+            ha="center",
+            va="bottom",
+            fontsize=10,
+            clip_on=False,
+        )
+
+    axes[0].set_ylabel(r"MVROC folding solution $P_{\mathrm{rot}}$ [h]")
+    plt.setp(axes[1].get_yticklabels(), visible=False)
+    fig.subplots_adjust(left=0.08, right=0.90, top=0.90, bottom=0.12, wspace=0.06)
+
+    if scatters and np.any(np.isfinite(h_all)):
+        cax = fig.add_axes([0.92, 0.18, 0.015, 0.62])
+        cbar = fig.colorbar(scatters[0], cax=cax)
+        cbar.set_label(r"$H_r$ [mag]")
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=DPI, bbox_inches="tight", pad_inches=0.2)
+    plt.close(fig)
+    n_h = int(np.isfinite(h_all).sum())
+    print(
+        f"  wrote {out_path} ({n_asteroids} asteroids, {len(plot)} solutions, "
+        f"{n_h} with H_r)"
+    )
+    return out_path
 
 
 def print_report(summary: pd.DataFrame, detail: dict) -> None:
@@ -371,7 +708,13 @@ def main(argv: list[str] | None = None) -> int:
         "--moi-csv",
         type=Path,
         default=MOI_CSV,
-        help=f"MOI selection CSV (default {MOI_CSV})",
+        help=f"MOI selection CSV for metadata (default {MOI_CSV})",
+    )
+    parser.add_argument(
+        "--solutions-csv",
+        type=Path,
+        default=MOI_SOLUTIONS,
+        help=f"MOI folding solutions CSV (default {MOI_SOLUTIONS})",
     )
     parser.add_argument(
         "--out-csv",
@@ -390,6 +733,23 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Do not list Greenstreet objects that are in obs but not in MOI",
     )
+    parser.add_argument(
+        "--period-fig",
+        type=Path,
+        default=PERIOD_FIG,
+        help=f"Period comparison PNG for the paper (default {PERIOD_FIG})",
+    )
+    parser.add_argument(
+        "--period-csv",
+        type=Path,
+        default=PERIOD_CSV,
+        help=f"Period pairs CSV (default {PERIOD_CSV})",
+    )
+    parser.add_argument(
+        "--skip-period-fig",
+        action="store_true",
+        help="Skip the MVROC vs literature period figure",
+    )
     args = parser.parse_args(argv)
 
     args.out_log.parent.mkdir(parents=True, exist_ok=True)
@@ -399,10 +759,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         started = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         print(f"mvroc_literature_comparison.py  started {started}")
-        print(f"n_min={args.n_min}  moi_csv={args.moi_csv}")
+        print(
+            f"n_min={args.n_min}  moi_csv={args.moi_csv}  "
+            f"solutions_csv={args.solutions_csv}"
+        )
         print()
 
-        summary, detail = compute_stats(n_min=args.n_min, moi_csv=args.moi_csv)
+        summary, detail = compute_stats(
+            n_min=args.n_min,
+            moi_csv=args.moi_csv,
+            solutions_csv=args.solutions_csv,
+        )
         if args.quiet_missing:
             detail = dict(detail)
             detail["greenstreet_in_obs_not_moi"] = []
@@ -414,6 +781,34 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print(f"Wrote {args.out_csv}")
         print(f"Wrote {args.out_log}")
+
+        if not args.skip_period_fig:
+            print()
+            print("=" * 70)
+            print("MVROC vs LITERATURE PERIODS (MOI folding solutions)")
+            print("=" * 70)
+            pairs = build_period_pairs(
+                moi_csv=args.moi_csv,
+                solutions_csv=args.solutions_csv,
+            )
+            args.period_csv.parent.mkdir(parents=True, exist_ok=True)
+            pairs.to_csv(args.period_csv, index=False)
+            n_ast = int(pairs["provid"].nunique()) if not pairs.empty else 0
+            print(
+                f"Wrote {args.period_csv} "
+                f"({n_ast} asteroids, {len(pairs)} solution pairs)"
+            )
+            if not pairs.empty:
+                print(pairs.drop_duplicates("provid")["literature_catalog"]
+                      .value_counts().to_string())
+                print(
+                    "solutions per asteroid:\n"
+                    + pairs.groupby("provid")["solution"].count()
+                    .value_counts()
+                    .sort_index()
+                    .to_string()
+                )
+            plot_mvroc_vs_literature_periods(pairs, out_path=args.period_fig)
     finally:
         sys.stdout = previous_stdout
         log_file.close()

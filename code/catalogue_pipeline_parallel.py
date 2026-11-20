@@ -40,10 +40,12 @@ _FLUSH_EVERY = 20
 
 
 def choose_selection(cli_provids):
-    """Same asteroid list as catalogue_pipeline._main."""
-    if cli_provids:
-        return cp.unpack_selection(cp.select_provid_list(provids=cli_provids))
-    return cp.unpack_selection(
+    """Same asteroid list as catalogue_pipeline._main.
+
+    With --provid, keep the active selector (MOI, …) and restrict to those
+    names instead of switching to select_provid_list.
+    """
+    selected, df_set, df_rot, analysis, missing = cp.unpack_selection(
         # cp.select_provid_rotation()
         # cp.select_provid_rotfold()
         # cp.select_provid_list()
@@ -52,8 +54,23 @@ def choose_selection(cli_provids):
         # cp.select_provid_revisit()
         # cp.select_provid_updateH()
         # cp.select_provid_twoprov()
-        cp.select_provid_literature()
+        # cp.select_provid_literature()
+        # cp.select_provid_literature_selrule()
+        # cp.select_provid_MOI()
+        # cp.select_MOC_solutions()
+        cp.select_provid_mvroc_moi()
     )
+    if not cli_provids:
+        return selected, df_set, df_rot, analysis, missing
+
+    wanted = {str(p).strip() for p in cli_provids}
+    selected = selected[
+        selected["provid"].astype(str).str.strip().isin(wanted)
+    ].reset_index(drop=True)
+    missing = [p for p in cli_provids if str(p).strip() not in set(
+        selected["provid"].astype(str).str.strip()
+    )]
+    return selected, df_set, df_rot, analysis, missing
 
 
 def _parse_args(argv):
@@ -116,7 +133,9 @@ def _paint_span_lines(text):
     return "".join(painted)
 
 
-def _init_worker(fig_dir, designations, df_rot, analysis, exclude_lx, nb, force):
+def _init_worker(
+    fig_dir, designations, df_rot, analysis, exclude_lx, nb, force, use_selrule
+):
     """Point this process at the figure directory without reopening the log."""
     os.environ["FORCE_COLOR"] = "1"
     cp.FIG_DIR = cp.Path(fig_dir)
@@ -129,11 +148,21 @@ def _init_worker(fig_dir, designations, df_rot, analysis, exclude_lx, nb, force)
         exclude_lx=exclude_lx,
         nb=nb,
         force=force,
+        use_selrule=use_selrule,
     )
 
 
 def _result_row(df_ast, provid, band, fit, analysis):
-    """One catalogue row. Same columns as the serial loop."""
+    """Catalogue row(s). Same columns as the serial loop.
+
+    Returns a list when folding_solution or shape_fit_solution draws several
+    panels (one row each); otherwise a single-row list.
+    """
+    if (
+        "shape_fit_solution" in analysis or "folding_solution" in analysis
+    ) and (fit.get("shape_fit_solution") or fit.get("folding_solution")):
+        return cp._moi_solution_result_rows(provid, fit)
+
     epoch_utc_ini, epoch_utc_end, obs_duration = cp.observation_window(df_ast)
     n_obs_bands = {
         f"n_obs_{b}": int((df_ast["band"].isin([f"L{b}", b])).sum())
@@ -189,6 +218,10 @@ def _result_row(df_ast, provid, band, fit, analysis):
         "multiband_photometry_compare"
     ):
         mb_row = fit["multiband_photometry_compare"]
+    elif "multiband_photometry_compare_literature" in analysis and fit.get(
+        "multiband_photometry_compare_literature"
+    ):
+        mb_row = fit["multiband_photometry_compare_literature"]
     if mb_row is not None:
         row["p_rot_h"] = mb_row["p_rot_h"]
         row["chi2_nu"] = mb_row["chi2_nu"]
@@ -207,6 +240,29 @@ def _result_row(df_ast, provid, band, fit, analysis):
             row["nightalias_n_tested"] = mb_row.get("nightalias_n_tested", 0)
             row["nightalias_n_kept"] = mb_row.get("nightalias_n_kept", 0)
             row["nightalias_periods"] = mb_row.get("nightalias_periods", "")
+            # REMOVABLE selrule columns
+            row["selrule_tested"] = mb_row.get("selrule_tested", 0)
+            row["selrule_kept"] = mb_row.get("selrule_kept", 0)
+            row["selrule_reason"] = mb_row.get("selrule_reason", "")
+        if "multiband_photometry_compare_literature" in analysis:
+            row["p_rot_lit_h"] = mb_row.get("p_rot_lit_h", np.nan)
+            row["chi2_nu_lit"] = mb_row.get("chi2_nu_lit", np.nan)
+            row["n_peaks_lit"] = mb_row.get("n_peaks_lit", np.nan)
+            row["power_lit"] = mb_row.get("power_lit", np.nan)
+            row["amp_ratio_lit"] = mb_row.get("amp_ratio_lit", np.nan)
+            row["span_alias_lit"] = mb_row.get("span_alias_lit", np.nan)
+            row["lit_label"] = mb_row.get("lit_label", "")
+            # REMOVABLE: selrule / nightalias bookkeeping on literature figures
+            row["nightalias_tested"] = mb_row.get("nightalias_tested", 0)
+            row["nightalias_stable"] = mb_row.get("nightalias_stable", 0)
+            row["nightalias_band"] = mb_row.get("nightalias_band", "")
+            row["nightalias_n_nights"] = mb_row.get("nightalias_n_nights", 0)
+            row["nightalias_n_tested"] = mb_row.get("nightalias_n_tested", 0)
+            row["nightalias_n_kept"] = mb_row.get("nightalias_n_kept", 0)
+            row["nightalias_periods"] = mb_row.get("nightalias_periods", "")
+            row["selrule_tested"] = mb_row.get("selrule_tested", 0)
+            row["selrule_kept"] = mb_row.get("selrule_kept", 0)
+            row["selrule_reason"] = mb_row.get("selrule_reason", "")
     if "justfold" in analysis and fit.get("justfold"):
         folded = fit["justfold"]
         row["p_rot_justfold_h"] = folded["p_rot_h"]
@@ -224,6 +280,7 @@ def _result_row(df_ast, provid, band, fit, analysis):
             if (
                 "multiband_photometry_compare" in analysis
                 or "multiband_photometry_nightalias" in analysis
+                or "multiband_photometry_compare_literature" in analysis
             ):
                 for key in cp.COMPARE_COLOR_COLUMNS:
                     summary.pop(key, None)
@@ -232,7 +289,7 @@ def _result_row(df_ast, provid, band, fit, analysis):
         row.update(fit["shape_k"])
     if "spectrum" in analysis:
         row.update(fit.get("spectrum") or {})
-    return row
+    return [row]
 
 
 def _run_asteroid(task):
@@ -243,7 +300,7 @@ def _run_asteroid(task):
     sys.stdout = buffer
     status = "fail"
     err = None
-    row = None
+    rows = None
     try:
         cp.FIG_DIR = _WORKER["fig_dir"]
         fit, err = cp.process(
@@ -256,12 +313,13 @@ def _run_asteroid(task):
             band=band,
             exclude_lx=_WORKER["exclude_lx"],
             Nb=_WORKER["nb"],
+            use_selrule=_WORKER.get("use_selrule", False),
         )
         if fit == "skip":
             status = "skip"
         elif fit is not None:
             status = "ok"
-            row = _result_row(df_ast, provid, band, fit, _WORKER["analysis"])
+            rows = _result_row(df_ast, provid, band, fit, _WORKER["analysis"])
         else:
             status = "fail"
             err = err or "Not enough data, or an error in the calculation"
@@ -275,7 +333,7 @@ def _run_asteroid(task):
         "provid": provid,
         "status": status,
         "err": err,
-        "row": row,
+        "rows": rows,
         "log": buffer.getvalue(),
     }
 
@@ -313,7 +371,8 @@ def _consume(results, analysis, succeeded, failed, pending_rows, pending_replace
         succeeded.append(provid)
     elif status == "ok":
         succeeded.append(provid)
-        pending_rows.append(results["row"])
+        for row in results.get("rows") or []:
+            pending_rows.append(row)
         pending_replaced.add(provid)
     else:
         failed[provid] = results["err"] or "Not enough data, or an error in the calculation"
@@ -368,6 +427,7 @@ def main():
         }
         exclude_lx = tuple(selected.attrs.get("exclude_lx", cp.EXCLUDE_LX))
         nb = int(selected.attrs.get("Nb", 2))
+        use_selrule = bool(selected.attrs.get("use_alias_keep_selrule", False))
         bands = (
             selected["band"]
             if "band" in selected.columns
@@ -378,6 +438,7 @@ def main():
         print(
             f"Parallel run: {workers} worker{'s' if workers != 1 else ''}, "
             f"{n_asteroids} asteroids"
+            + (", alias keep selrule ON" if use_selrule else "")
         )
         grouped = df_set.groupby("provid", sort=False)
         obs_of = {
@@ -405,6 +466,7 @@ def main():
             exclude_lx,
             nb,
             force,
+            use_selrule,
         )
         if n_asteroids == 0:
             pass

@@ -1,8 +1,8 @@
 [
 	{
 		"id": "medellin",
-	    "title": "Medellin VRO Catalogue (MVROC)",
-		"path": "code/figures/figures_medellin/",
+	        "title": "Medellin VRO Catalogue (MVROC)",
+		"path": "pipeline/figures/",
 		"start_with": null,
 		"configuration": {
 			"preview": true,

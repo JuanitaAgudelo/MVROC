@@ -1,0 +1,9 @@
+# MVROC pipeline + data helpers (repo root)
+numpy
+pandas
+matplotlib
+pyarrow
+astropy
+scipy
+pillow
+gdown
