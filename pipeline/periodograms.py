@@ -437,7 +437,7 @@ def mvroc_periodogram_asteroid(df, provid, Nb=NB, exclude=EXCLUDE_LX, qplot=True
     # --> Prepare the asteroid data.
     df_obj = mv.prepare_asteroid(df, provid)
     if df_obj.empty:
-        print("  skip: no photometric observations in pipeline products")
+        print("  skip: no photometric observations in MOI photometry")
         return None
 
     print(f"  N = {len(df_obj)} observations")

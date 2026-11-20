@@ -15,77 +15,118 @@ One stage = one script = one scientific step.
 |-------|------|
 | `pipeline/<stage>.py` | Science, stage constants, plot, CSV/log/CLI |
 | `pipeline/mvroc.py` | Shared helpers used by **more than one** stage |
-| `outputs/<stage>/` | Everything this stage writes |
+| `pipeline/outputs/<stage>/` | Everything this stage writes |
 
 Do not invent a new architecture. Copy the human style of the reference drivers.
 
 ---
 
-## 2. Upstream and downstream
+## 2. Pipeline layout
+
+Always run with **cwd = `pipeline/`**. Paths are relative strings from there.
+
+```text
+pipeline/                       # cwd for every driver
+  inputs/                       # raw downloads (obs tables)
+    obs_sbn_X05_full.parquet
+  outputs/                      # stage outputs only
+    crossmatches/
+    orbits/
+    states/
+    mois/
+    periodograms/
+    foldings/
+    mocs/
+    solutions/
+  mvroc.py
+  periodograms.py
+  foldings.py
+  solutions.py
+  PATTERN.md
+```
+
+| Path from `pipeline/` | Constant in `mvroc.py` | Role |
+|-----------------------|------------------------|------|
+| `inputs/` | `INPUTS` | Raw observation tables |
+| `outputs/` | `OUTPUTS` | Per-stage pipeline outputs |
+
+**Do not use** `pathlib.Path.resolve()`, `__file__`, or path helper wrappers
+(`set_fig_dir`, `results_path`, …).
+
+---
+
+## 3. Upstream and downstream
 
 The pipeline is **sequential**. A driver assumes earlier stages already ran.
 
 Before writing a driver, declare:
 
-1. **Stage name** — short plural or stage noun (`periodograms`, `foldings`).
-2. **Upstream** — stage outputs (or seed products) that must exist first.
+1. **Stage name** — short plural or stage noun (`periodograms`, `foldings`, `solutions`).
+2. **Upstream** — stage outputs (or `inputs/`) that must exist first.
 3. **Downstream** — stages that will read this stage later.
 
 ### Current stage order
 
 | Order | Stage | Writes | Upstream |
 |------:|-------|--------|----------|
-| 0 | seed | `products/` (temporary source) | raw downloads |
-| 1 | `crossmatches` | `outputs/crossmatches/crossmatches.csv` | MPC + VRO ids |
+| 0 | seed | `inputs/` (raw obs downloads) | external downloads |
+| 1 | `crossmatches` | `outputs/crossmatches/crossmatches.csv` | `inputs/` + MPC |
 | 2 | `orbits` | `outputs/orbits/orbits.csv` | crossmatches |
 | 3 | `states` | `outputs/states/states.parquet` | orbits + observations |
 | 4 | `mois` | `outputs/mois/mois.parquet` | states (MOI filter) |
-| 5 | `periodograms` | `outputs/periodograms/` | mois + states + crossmatches (+ orbits upstream) |
+| 5 | `periodograms` | `outputs/periodograms/` | mois + states + crossmatches |
 | 6 | `foldings` | `outputs/foldings/` | periodograms + photometry |
-| 7 | `moc` | `outputs/moc/moc.csv` | foldings (visual / selected periods) |
-| 8 | `solutions` | `outputs/solutions/` | moc + photometry |
+| 7 | `mocs` | `outputs/mocs/mocs.csv` | foldings (visual / selected periods) |
+| 8 | `solutions` | `outputs/solutions/` | mocs + photometry |
 | 9 | shapefit | (future) | solutions |
+
+Until early-stage drivers exist, their outputs may be **simulated** under
+`outputs/<stage>/` (see current `crossmatches`, `orbits`, `states`, `mois`,
+`mocs`).
 
 ### Rules
 
 - Read earlier stage results from `outputs/<upstream>/`.
+- Read raw observations from `inputs/` (via `mv.OBSERVATIONS_PARQUET` when needed).
 - Do **not** reimplement an upstream stage inside a later driver.
 - If an upstream file is missing, exit with a clear message.
 - Document Inputs / Outputs (including upstream paths) in the driver docstring.
-- Split monolithic procedures into thin drivers along this order. Do not fold
-  folding science into periodograms “because the old monolith did both”.
+- Split monolithic procedures into thin drivers along this order.
 
-### Example: foldings depends on periodograms
+### Example chain
 
 ```text
-crossmatches → orbits → states → mois → periodograms → foldings → shapefit
-                                              ↑                ↑
-                                         upstream          this stage
+inputs → crossmatches → orbits → states → mois
+  → periodograms → foldings → mocs → solutions → shapefit
 ```
 
-`foldings.py` reads:
+**`foldings.py`** reads:
 
 - `outputs/periodograms/periodograms.csv` (voted periods)
 - photometry via `mv.load_moi_photometry()` (mois + states + crossmatches)
 
 and writes only under `outputs/foldings/`.
 
+**`mocs`** (future driver) selects which folded periods are retained after
+visual review and writes `outputs/mocs/mocs.csv`.
+
+**`solutions.py`** reads:
+
+- `outputs/mocs/mocs.csv` (retained solution ids and periods)
+- photometry via `mv.load_moi_photometry()`
+
+and writes only under `outputs/solutions/`.
+
 ---
 
-## 3. Layout and execution
-
-Always run with cwd = `pipeline/`:
+## 4. Layout and execution
 
 ```bash
 cd pipeline
 python periodograms.py "1981 US22"
 python foldings.py all
+python solutions.py "1981 US22"
 ```
-
-Paths are relative strings: `products/...`, `outputs/...`.
-
-**Do not use** `pathlib.Path.resolve()`, `__file__`, or path helper wrappers
-(`set_fig_dir`, `results_path`, …).
 
 Create the output directory once at driver start:
 
@@ -110,25 +151,38 @@ RESULTS_COLUMNS = [
 ]
 ```
 
-Shared upstream paths live in `mvroc.py`:
+Shared paths live in `mvroc.py`:
 
 ```python
+INPUTS = "inputs"
+OUTPUTS = "outputs"
+
+OBSERVATIONS_PARQUET = "inputs/obs_sbn_X05_full.parquet"
+
 CROSSMATCHES_CSV = "outputs/crossmatches/crossmatches.csv"
 ORBITS_CSV = "outputs/orbits/orbits.csv"
 STATES_PARQUET = "outputs/states/states.parquet"
 MOIS_PARQUET = "outputs/mois/mois.parquet"
+MOCS_CSV = "outputs/mocs/mocs.csv"
+```
+
+Photometry for photometric stages is loaded once with:
+
+```python
+df = mv.load_moi_photometry()
+# joins outputs/mois + outputs/states + outputs/crossmatches
 ```
 
 ---
 
-## 4. Naming
+## 5. Naming
 
 | Thing | Pattern | Example |
 |-------|---------|---------|
-| Driver file | `<stage>.py` | `periodograms.py` |
-| Entry point | `mvroc_<stage>()` | `mvroc_periodograms()` |
+| Driver file | `<stage>.py` | `periodograms.py`, `solutions.py` |
+| Entry point | `mvroc_<stage>()` | `mvroc_periodograms()`, `mvroc_solutions()` |
 | One-object science | `mvroc_<algo>_asteroid(...)` | `mvroc_periodogram_asteroid(...)` |
-| Figure | `mvroc_<algo>_plot(...)` | `mvroc_folding_plot(...)` |
+| Figure | `mvroc_<algo>_plot(...)` | `mvroc_folding_plot(...)`, `mvroc_solution_plot(...)` |
 | Skip helper | `mv.already_in_outputs(provid, RESULTS_CSV)` | shared in `mvroc.py` |
 | Arrays | plural `s` suffix | `ts`, `ys`, `dys` |
 | Constants | `UPPER_CASE` | `NB`, `N_FREQ`, `MIN_MAG_ERROR` |
@@ -137,13 +191,21 @@ Repeated magic numbers become named constants (in the driver if stage-local;
 in `mvroc.py` if shared). Prefer the literal `"H"` over a useless global
 `PROP = "H"`.
 
+Figure stems:
+
+| Stage | Figure path |
+|-------|-------------|
+| periodograms | `outputs/periodograms/<provid>_periodogram.webp` |
+| foldings | `outputs/foldings/<provid>_folding.webp` |
+| solutions | `outputs/solutions/<provid>_solution.webp` |
+
 ---
 
-## 5. `mvroc.py` vs the driver
+## 6. `mvroc.py` vs the driver
 
 **Put in `mvroc.py` only what a second stage already needs:**
 
-- upstream path constants
+- path constants (`INPUTS`, `OUTPUTS`, stage CSV/parquet paths)
 - `load_moi_photometry`, `prepare_asteroid`, `observation_counts`, …
 - `LogOutput`, `save_figure`, `slug`
 - common helpers: `cadence_min_period`, `merge_frequencies`, `already_in_outputs`
@@ -157,11 +219,12 @@ in `mvroc.py` if shared). Prefer the literal `"H"` over a useless global
 - stage CSV / log / CLI
 
 If unsure, leave it in the driver. Move to `mvroc.py` when a second stage
-imports it for real.
+imports it for real. Prefer importing another driver's helpers only as a
+temporary bridge; promote shared code into `mvroc.py` soon after.
 
 ---
 
-## 6. File skeleton
+## 7. File skeleton
 
 ```python
 #!/usr/bin/env python3
@@ -243,7 +306,7 @@ after the `# ---` block). Use **one** blank line between routines — never two.
 
 ---
 
-## 7. CLI
+## 8. CLI
 
 One positional argument only:
 
@@ -270,11 +333,11 @@ if target.lower() != "all":
 
 ---
 
-## 8. Results CSV
+## 9. Results CSV
 
 - Path: `outputs/<stage>/<stage>.csv`
 - At driver start: create with header if missing
-- Per asteroid: **append** with `header=False`
+- Per asteroid (or per solution): **append** with `header=False`
 - Never rewrite or upsert rows — the user deletes the CSV to start clean
 - Skip with `mv.already_in_outputs(provid, RESULTS_CSV)`
 
@@ -300,7 +363,7 @@ truly needs them.
 
 ---
 
-## 9. Logging and comments
+## 10. Logging and comments
 
 Mirror stdout to the stage log:
 
@@ -339,11 +402,10 @@ Example milestones inside science code:
 
 ---
 
-## 10. Figures
+## 11. Figures
 
 - Save with `mv.save_figure(fig, path)` (WebP + MVROC watermark).
 - Path: `f"{OUT_DIR}/{mv.slug(provid)}_<stem>.webp"`
-  - examples: `*_periodogram.webp`, `*_folding.webp`
 - Keep **calculation** and **plot** in separate routines.
 - Plotting is optional via `qplot=True` when the CSV row is the main product.
 
@@ -355,7 +417,7 @@ print(f"  democratic periodogram: {path}")
 
 ---
 
-## 11. Docstrings
+## 12. Docstrings
 
 NumPy / human style. Full `Parameters` / `Returns` / `Examples` on helpers
 and science routines. No double backticks. No `# doctest: +SKIP`.
@@ -386,18 +448,18 @@ The entry point `mvroc_<stage>()` docstring must include:
 - Stage / Upstream / Downstream (module docstring or driver docstring)
 - Command-line
 - Examples of invocation
-- Inputs (upstream outputs + any products still needed)
+- Inputs (upstream outputs + `inputs/` when needed)
 - Outputs (CSV, figures, log)
 - Returns
 
 ```python
-def mvroc_foldings():
-    """Run multiband two-peak folding from the command line.
+def mvroc_solutions():
+    """Run folded mocs solutions from the command line.
 
     Must be launched from the pipeline/ directory.
 
-    Stage: foldings
-    Upstream: periodograms
+    Stage: solutions
+    Upstream: mocs
     Downstream: shapefit
 
     Command-line
@@ -405,28 +467,28 @@ def mvroc_foldings():
     Exactly one positional argument:
 
     * provid - one asteroid name, e.g. "1981 US22" or 1981_US22
-    * all - process every asteroid listed in periodograms.csv
+    * all - process every asteroid listed in mocs.csv
 
     Examples
     --------
-    python foldings.py "1981 US22"
-    python foldings.py all
+    python solutions.py "1981 US22"
+    python solutions.py all
 
     Inputs
     ------
-    outputs/periodograms/periodograms.csv
-        Democratic vote periods (periods_dem_h) from upstream.
+    outputs/mocs/mocs.csv
+        Retained solution ids and periods.
     outputs/mois/mois.parquet, outputs/states/states.parquet,
     outputs/crossmatches/crossmatches.csv
         MOI photometry with H (via mv.load_moi_photometry).
 
     Outputs
     -------
-    outputs/foldings/foldings.csv
-        One row per plotted two-peak solution, with color columns.
-    outputs/foldings/<provid>_folding.webp
-        Folded comparison figure.
-    outputs/foldings/foldings.log
+    outputs/solutions/solutions.csv
+        One row per retained MVROC solution.
+    outputs/solutions/<provid>_solution.webp
+        Vertical stack of folded panels.
+    outputs/solutions/solutions.log
         Same text as the terminal.
 
     Returns
@@ -437,10 +499,10 @@ def mvroc_foldings():
 
 ---
 
-## 12. Porting from `catalogue_pipeline.py`
+## 13. Porting from `catalogue_pipeline.py`
 
 1. Locate the monolith function and the private helpers only it uses.
-2. List real data dependencies (columns, upstream outputs).
+2. List real data dependencies (columns, upstream outputs, inputs).
 3. Extract the minimum science. Drop:
    - complex argparse / force / skip-by-figure-existence
    - incidental observations CSV writes
@@ -459,12 +521,12 @@ python <stage>.py "1981 US22"
 
 ---
 
-## 13. Checklist before merge
+## 14. Checklist before merge
 
 - [ ] Lives in `pipeline/<stage>.py`
 - [ ] Runs from `pipeline/`
 - [ ] Upstream / Downstream declared
-- [ ] Reads only `outputs/<upstream>/` (and shared loaders in `mvroc.py`)
+- [ ] Reads `outputs/<upstream>/` and/or `inputs/` as documented
 - [ ] Writes only `outputs/<stage>/`
 - [ ] Entry point `mvroc_<stage>()`; stage helpers in the same file
 - [ ] CLI: `provid | all`
@@ -478,7 +540,7 @@ python <stage>.py "1981 US22"
 
 ---
 
-## 14. Agent request template
+## 15. Agent request template
 
 ```text
 Convert procedure <NAME_IN_catalogue_pipeline.py> into a new pipeline driver
@@ -486,7 +548,7 @@ following pipeline/PATTERN.md and the style of pipeline/periodograms.py +
 pipeline/mvroc.py.
 
 Stage name: <stage>
-Upstream: <earlier outputs>
+Upstream: <earlier outputs / inputs>
 Downstream: <who consumes this next>
 
 Scope: only <short list of functions / steps>.

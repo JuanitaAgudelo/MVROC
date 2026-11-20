@@ -1,11 +1,11 @@
 """Shared helpers for MVROC pipeline scripts.
 
 Run every script from the pipeline/ directory so that all paths below
-are relative (products/..., outputs/...).
+are relative (inputs/..., outputs/...).
 
 mvroc.py only holds routines needed by more than one pipeline stage:
-product loaders, path helpers, and small photometry utilities. Science steps
-for a given stage live in that stage's script (e.g. periodograms.py).
+loaders, path helpers, and small photometry utilities. Science steps for a
+given stage live in that stage's script (e.g. periodograms.py).
 """
 
 import os
@@ -15,32 +15,26 @@ import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# Directories
+# Directories (cwd = pipeline/)
 # ---------------------------------------------------------------------------
-PRODUCTS = "products"
+INPUTS = "inputs"
 OUTPUTS = "outputs"
 
 # ---------------------------------------------------------------------------
-# Upstream stage outputs (simulated from products/ until those drivers exist)
+# Raw inputs (downloaded observation tables)
+# ---------------------------------------------------------------------------
+OBSERVATIONS_PARQUET = f"{INPUTS}/obs_sbn_X05_full.parquet"
+
+# ---------------------------------------------------------------------------
+# Stage outputs
 # ---------------------------------------------------------------------------
 CROSSMATCHES_CSV = f"{OUTPUTS}/crossmatches/crossmatches.csv"
 ORBITS_CSV = f"{OUTPUTS}/orbits/orbits.csv"
 STATES_PARQUET = f"{OUTPUTS}/states/states.parquet"
 MOIS_PARQUET = f"{OUTPUTS}/mois/mois.parquet"
+MOCS_CSV = f"{OUTPUTS}/mocs/mocs.csv"
 
-# ---------------------------------------------------------------------------
-# Selection stage outputs (moc list is simulated from products/ for now)
-# ---------------------------------------------------------------------------
-MOC_CSV = f"{OUTPUTS}/moc/moc.csv"
-
-# ---------------------------------------------------------------------------
-# Legacy products (catalogue stages still under products/)
-# ---------------------------------------------------------------------------
-OBSERVATIONS_PARQUET = f"{PRODUCTS}/obs_sbn_X05_full.parquet"
-SOL_CSV = f"{PRODUCTS}/db_mvroc_sol.csv"
-CATALOGUE_CSV = f"{PRODUCTS}/mvroc.csv"
-
-# Backward-compatible aliases used by photometry loaders.
+# Aliases used by photometry loaders.
 STATE_PARQUET = STATES_PARQUET
 MOI_OBS_PARQUET = MOIS_PARQUET
 VRO_MPC_CSV = CROSSMATCHES_CSV
@@ -222,7 +216,7 @@ def already_in_outputs(provid, results_csv):
     return str(provid) in set(done)
 
 # ---------------------------------------------------------------------------
-# Product loaders
+# Photometry loaders
 # ---------------------------------------------------------------------------
 def load_vro_mpc_alias_groups(path=None):
     """Groups of VRO provids that share one MPC designation.
@@ -281,13 +275,14 @@ def merge_dual_provids(df):
     >>> out, alias_map = merge_dual_provids(df)
     """
 
-    #--> Load the dual-provid alias groups from the CSV file.
+    # --> Load the dual-provid alias groups from the CSV file.
+    print(f"  Reading {VRO_MPC_CSV} ...")
     groups = load_vro_mpc_alias_groups()
 
-    #--> Count the number of observations per provid.
+    # --> Count the number of observations per provid.
     counts = df.groupby(df["provid"].astype(str).str.strip()).size()
 
-    #--> Create a mapping from original provid to the canonical provid.
+    # --> Create a mapping from original provid to the canonical provid.
     alias_map = {}
     for group in groups:
         present = [p for p in group["provids"] if p in counts.index]
@@ -297,24 +292,24 @@ def merge_dual_provids(df):
         for provid in group["provids"]:
             alias_map[provid] = canonical
 
-    #--> If no alias map was created, return the original DataFrame and an empty map.
+    # --> If no alias map was created, return the original DataFrame and an empty map.
     if not alias_map:
         return df.copy(), alias_map
 
-    #--> Remap the provid column to the canonical provid.
+    # --> Remap the provid column to the canonical provid.
     out = df.copy()
     out["provid"] = (
         out["provid"].astype(str).str.strip().map(lambda p: alias_map.get(p, p))
     )
 
-    #--> Sort the data and return the remapped DataFrame and the alias map.
+    # --> Sort the data and return the remapped DataFrame and the alias map.
     out = out.sort_values(
         by=["provid", "band", "obstime"], ascending=[True, True, True]
     ).reset_index(drop=True)
 
     print(
         f"  Dual-provid merge: {len(set(alias_map.values()))} objects from "
-        f"{VRO_MPC_CSV.split('/')[-1]}"
+        f"{VRO_MPC_CSV}"
     )
     return out, alias_map
 
@@ -352,14 +347,14 @@ def load_moi_photometry():
     ]
 
     print("Loading MOI photometry ...")
-    
+
     # --> Load the MOI photometry key columns from the parquet file.
-    print(f"  Loading {MOI_OBS_PARQUET.split('/')[-1]} ...")
+    print(f"  Reading {MOI_OBS_PARQUET} ...")
     df = pd.read_parquet(MOI_OBS_PARQUET, columns=cols)
     print(f"    {len(df):,} rows, {df['provid'].nunique():,} provids")
 
     # --> Load the absolute magnitude H from the parquet file.
-    print(f"  Loading H from {STATE_PARQUET.split('/')[-1]} ...")
+    print(f"  Reading {STATE_PARQUET} (H, provid_mpc) ...")
     state = pd.read_parquet(STATE_PARQUET, columns=["id", "H", "provid_mpc"])
     state["id"] = pd.to_numeric(state["id"], errors="coerce")
     df["id"] = pd.to_numeric(df["id"], errors="coerce")

@@ -40,13 +40,32 @@ The public table is [mvroc.csv](mvroc.csv): 1 092 solutions, 99 columns, 703 a
 13. **Greenstreet** — `rot_per_lsm_gst`, `rot_per_fr_gst`
 14. **Dynamics** — `dyn_class`, `T_earth`, `T_mars`, `T_jup`, `T_nep`, `flag_resonant`, `resonant_ratio`
 
-## Pipeline results
+## Repository layout
 
-First pipeline run: **4 November 2026**, on the Rubin MPC observation table downloaded **12 October 2026** (8 078 546 rows). The large parquet tables are in [this Google Drive folder](https://drive.google.com/drive/folders/1l99VF8mxHfaqc82aR4SSCKunrfRnXzCZ?usp=sharing).
+| Path | Role |
+|---|---|
+| [`pipeline/inputs/`](pipeline/inputs/) | Raw downloaded inputs (Rubin MPC observation tables) |
+| [`products/`](products/) | Pipeline data products and the public catalogue join |
+| [`pipeline/`](pipeline/) | Stage drivers (`periodograms.py`, `foldings.py`, …), `inputs/`, and `outputs/` |
+| [`mvroc.csv`](mvroc.csv) | Symlink to [`products/mvroc.csv`](products/mvroc.csv) |
+
+Pipeline scripts run with cwd = `pipeline/` and read `inputs/`, `../products/`, and write `outputs/`.
+
+## Inputs
+
+Raw observation tables live under [`pipeline/inputs/`](pipeline/inputs/). Large parquet files are kept outside git (see [Google Drive](https://drive.google.com/drive/folders/1l99VF8mxHfaqc82aR4SSCKunrfRnXzCZ?usp=sharing)); the repo stores symlinks when the files sit under `code/data/`.
 
 | File | Format | Rows | Role |
 |---|---|---:|---|
-| `obs_sbn_X05_full.parquet` | Parquet | 8 078 546 | Original Rubin MPC observations (12 October 2026). On Google Drive. |
+| `obs_sbn_X05_full.parquet` | Parquet | 8 078 546 | Original Rubin MPC observations (12 October 2026) |
+| `obs_sbn_X05_full_mpc_desig.parquet` | Parquet | | Same table with MPC designations attached (used by the historical monolith) |
+
+## Pipeline products
+
+First pipeline run: **4 November 2026**, on the Rubin MPC observation table downloaded **12 October 2026** (8 078 546 rows). Product files live under [`products/`](products/); column details are in [`products/README.md`](products/README.md). Large parquet tables are in [this Google Drive folder](https://drive.google.com/drive/folders/1l99VF8mxHfaqc82aR4SSCKunrfRnXzCZ?usp=sharing).
+
+| File | Format | Rows | Role |
+|---|---|---:|---|
 | `db_vro_mpc.csv` | CSV | 300 952 | Rubin ↔ MPC equivalence |
 | `db_mvroc_orbits.csv` | CSV | 298 225 | Orbital elements per MPC object |
 | `db_mvroc_state.parquet` | Parquet | 8 021 267 | Per-observation geometry and absolute magnitude. On Google Drive. |

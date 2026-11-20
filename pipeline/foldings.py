@@ -899,7 +899,7 @@ def mvroc_folding_asteroid(df, provid, candidates, qplot=True):
     print("=" * 20 + "\n" + provid + "\n" + "=" * 20)
     df_obj = mv.prepare_asteroid(df, provid)
     if df_obj.empty:
-        print("  skip: no photometric observations in pipeline products")
+        print("  skip: no photometric observations in MOI photometry")
         return None
     print(f"  N = {len(df_obj)} observations")
     if not candidates:

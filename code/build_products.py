@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Assemble MVROC pipeline products under pipeline/products/ from code/data
+"""Assemble MVROC pipeline products under products/ from pipeline/inputs/
 and code/figures (figures_nobs for MOI; figures_MOI / figures_mvroc_sol for
 MOC and solutions).
 
@@ -17,12 +17,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 ROOT = Path(__file__).resolve().parents[1]
+INPUTS = ROOT / "pipeline" / "inputs"
 DATA = ROOT / "code" / "data"
 MOI = ROOT / "code" / "figures" / "figures_MOI"
 FOLD = ROOT / "code" / "figures" / "figures_mvroc_sol"
 NOBS = ROOT / "code" / "figures" / "figures_nobs"
-OBS_SRC = DATA / "obs_sbn_X05_full.parquet"
-OUT = ROOT / "pipeline" / "products"
+OBS_SRC = INPUTS / "obs_sbn_X05_full.parquet"
+OUT = ROOT / "products"
 
 # Catalogue column order from CATALOGUE.md (plus solution / classification).
 CATALOGUE_COLUMNS = [

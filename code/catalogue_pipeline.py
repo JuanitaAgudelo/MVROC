@@ -76,8 +76,8 @@ OBS_FILE = DATA_DIR / "obs_sbn_X05_full_mpc_desig.parquet"
 MOI_DIR = ROOT / "figures" / "figures_MOI"
 MOI_SOLUTIONS = MOI_DIR / "solutions.csv"
 MOI_SELECTION = MOI_DIR / "asteroid_selection.csv"
-# Pipeline products (repo/pipeline/products), not code/data/.
-PRODUCTS_DIR = ROOT.parent / "pipeline" / "products"
+# Pipeline products (repo/products), not code/data/.
+PRODUCTS_DIR = ROOT.parent / "products"
 STATE_PARQUET = PRODUCTS_DIR / "db_mvroc_state.parquet"
 VRO_MPC_CSV = PRODUCTS_DIR / "db_vro_mpc.csv"
 MOI_OBS_PARQUET = PRODUCTS_DIR / "db_mvroc_moi.parquet"

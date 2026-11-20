@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Folded light curves for MOC-retained rotation solutions.
+"""Folded light curves for mocs-retained rotation solutions.
 
 Stage: solutions
-Upstream: moc (outputs/moc/moc.csv) + photometry (mois, states, crossmatches)
+Upstream: mocs (outputs/mocs/mocs.csv) + photometry (mois, states, crossmatches)
 Downstream: shapefit
 
 Usage (always from the pipeline/ directory):
@@ -11,7 +11,7 @@ Usage (always from the pipeline/ directory):
     python solutions.py 1981_US22
     python solutions.py all
 
-Reads retained periods from outputs/moc/moc.csv and photometry via
+Reads retained periods from outputs/mocs/mocs.csv and photometry via
 mv.load_moi_photometry(). Writes outputs/solutions/: solutions.csv,
 *_solution.webp and solutions.log. One CSV row per MVROC solution.
 """
@@ -34,7 +34,7 @@ import mvroc as mv
 OUT_DIR = "outputs/solutions"
 RESULTS_CSV = f"{OUT_DIR}/solutions.csv"
 LOG_FILE = f"{OUT_DIR}/solutions.log"
-UPSTREAM_CSV = mv.MOC_CSV
+UPSTREAM_CSV = mv.MOCS_CSV
 
 HARMONIC_ORDER = fd.HARMONIC_ORDER
 FILT_ORDER = fd.FILT_ORDER
@@ -67,7 +67,7 @@ RESULTS_COLUMNS = [
 # Small helpers
 # ---------------------------------------------------------------------------
 def solution_periods(solutions, periods_h):
-    """Expand slash-separated MOC solution ids and periods.
+    """Expand slash-separated mocs solution ids and periods.
 
     Parameters
     ----------
@@ -403,7 +403,7 @@ def mvroc_solution_plot(provid, frame, panels, filter_counts):
 # Science: one asteroid
 # ---------------------------------------------------------------------------
 def mvroc_solution_asteroid(df, provid, solutions, periods_h, qplot=True):
-    """Fold every MOC-retained period for one asteroid.
+    """Fold every mocs-retained period for one asteroid.
 
     Parameters
     ----------
@@ -412,9 +412,9 @@ def mvroc_solution_asteroid(df, provid, solutions, periods_h, qplot=True):
     provid : str
         Asteroid name.
     solutions : str
-        Slash-separated solution ids from moc.csv.
+        Slash-separated solution ids from mocs.csv.
     periods_h : str
-        Slash-separated periods in hours from moc.csv.
+        Slash-separated periods in hours from mocs.csv.
     qplot : bool, optional
         If True (default), write the solution figure.
 
@@ -431,11 +431,11 @@ def mvroc_solution_asteroid(df, provid, solutions, periods_h, qplot=True):
     print("=" * 20 + "\n" + provid + "\n" + "=" * 20)
     df_obj = mv.prepare_asteroid(df, provid)
     if df_obj.empty:
-        print("  skip: no photometric observations in pipeline products")
+        print("  skip: no photometric observations in MOI photometry")
         return None
     print(f"  N = {len(df_obj)} observations")
 
-    # --> Expand the retained solution list from moc.csv.
+    # --> Expand the retained solution list from mocs.csv.
     try:
         specs = solution_periods(solutions, periods_h)
     except ValueError as exc:
@@ -513,12 +513,12 @@ def mvroc_solution_asteroid(df, provid, solutions, periods_h, qplot=True):
 # Solutions driver
 # ---------------------------------------------------------------------------
 def mvroc_solutions():
-    """Run folded MOC solutions from the command line.
+    """Run folded mocs solutions from the command line.
 
     Must be launched from the pipeline/ directory.
 
     Stage: solutions
-    Upstream: moc
+    Upstream: mocs
     Downstream: shapefit
 
     Command-line
@@ -526,7 +526,7 @@ def mvroc_solutions():
     Exactly one positional argument:
 
     * provid - one asteroid name, e.g. "1981 US22" or 1981_US22
-    * all - process every asteroid listed in moc.csv
+    * all - process every asteroid listed in mocs.csv
 
     Examples
     --------
@@ -536,7 +536,7 @@ def mvroc_solutions():
 
     Inputs
     ------
-    outputs/moc/moc.csv
+    outputs/mocs/mocs.csv
         Retained solution ids and periods (solutions, periods_h).
     outputs/mois/mois.parquet, outputs/states/states.parquet,
     outputs/crossmatches/crossmatches.csv
@@ -573,8 +573,8 @@ def mvroc_solutions():
 
     if not os.path.isfile(UPSTREAM_CSV):
         raise SystemExit(
-            f"Missing upstream moc CSV: {UPSTREAM_CSV}\n"
-            "Provide outputs/moc/moc.csv (simulated from products/db_mvroc_moc.csv)."
+            f"Missing upstream mocs CSV: {UPSTREAM_CSV}\n"
+            "Run the mocs stage first (outputs/mocs/mocs.csv)."
         )
     # --> Initialize the results CSV if it doesn't exist.
     if not os.path.isfile(RESULTS_CSV):
@@ -584,7 +584,7 @@ def mvroc_solutions():
     print(f"Log: {LOG_FILE}")
     print(f"Upstream: {UPSTREAM_CSV}")
 
-    # --> Asteroids to fold = those listed in moc.csv.
+    # --> Asteroids to fold = those listed in mocs.csv.
     upstream = pd.read_csv(UPSTREAM_CSV)
     needed = {"provid", "solutions", "periods_h"}
     if not needed.issubset(upstream.columns):
