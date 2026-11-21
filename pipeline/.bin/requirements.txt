@@ -7,3 +7,4 @@ astropy
 scipy
 pillow
 gdown
+spiceypy

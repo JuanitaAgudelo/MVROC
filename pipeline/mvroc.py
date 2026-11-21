@@ -24,6 +24,8 @@ OUTPUTS = "outputs"
 # Raw inputs (downloaded observation tables)
 # ---------------------------------------------------------------------------
 OBSERVATIONS_PARQUET = f"{INPUTS}/obs_sbn_X05_full.parquet"
+MPCORB_DAT = f"{INPUTS}/mpcorb_extended.dat.gz"
+KERNELS = f"{INPUTS}/kernels"  # SPICE kernels (copied from code/kernels)
 
 # ---------------------------------------------------------------------------
 # Stage outputs
@@ -214,6 +216,64 @@ def already_in_outputs(provid, results_csv):
         return False
     done = pd.read_csv(results_csv, usecols=["provid"])["provid"].astype(str)
     return str(provid) in set(done)
+
+def provids_in_outputs(results_csv, column="provid"):
+    """Set of names already written in a stage results CSV.
+
+    Faster than already_in_outputs when a stage checks many objects: the
+    CSV is read once.
+
+    Parameters
+    ----------
+    results_csv : str
+        Path to the stage CSV, e.g. outputs/orbits/orbits.csv.
+    column : str, optional
+        Name column, e.g. provid or provid_vro.
+
+    Returns
+    -------
+    set of str
+        Empty if the CSV does not exist.
+
+    Examples
+    --------
+    >>> "2026 DO29" in provids_in_outputs("outputs/crossmatches/crossmatches.csv", "provid_vro")
+    True
+    """
+    if not os.path.isfile(results_csv):
+        return set()
+    done = pd.read_csv(results_csv, usecols=[column])[column].astype(str)
+    return set(done)
+
+def check_results_header(results_csv, columns):
+    """Exit if a stage CSV was written with other columns.
+
+    Appending rows under a different header (e.g. an old or simulated file)
+    would corrupt the CSV, so the driver stops and asks to delete it.
+
+    Parameters
+    ----------
+    results_csv : str
+        Path to the stage CSV.
+    columns : list of str
+        Expected columns (the driver RESULTS_COLUMNS).
+
+    Returns
+    -------
+    None
+        Raises SystemExit if the header differs.
+
+    Examples
+    --------
+    >>> check_results_header("outputs/orbits/orbits.csv", ["provid_vro", "provid_mpc"])
+    SystemExit: outputs/orbits/orbits.csv has columns [...], expected [...]. Delete it and run again.
+    """
+    header = list(pd.read_csv(results_csv, nrows=0).columns)
+    if header != list(columns):
+        raise SystemExit(
+            f"{results_csv} has columns {header}, expected {list(columns)}. "
+            "Delete it and run again."
+        )
 
 # ---------------------------------------------------------------------------
 # Photometry loaders

@@ -27,6 +27,15 @@ make install
 This installs [`.bin/requirements.txt`](.bin/requirements.txt)
 (`numpy`, `pandas`, `astropy`, `gdown`, …).
 
+**Without `make`** (e.g. Windows): the Makefile targets only run Python
+scripts, so run them directly from `pipeline/`:
+
+| `make` target | Equivalent command |
+|---|---|
+| `make install` | `python -m pip install -r .bin/requirements.txt` |
+| `make get_gdrive_data` | `python .bin/get_gdrive_data.py` |
+| `make get_public_data` | `python .bin/get_public_data.py` |
+
 ---
 
 ## 3. Download data
@@ -39,7 +48,8 @@ make get_gdrive_data
 ```
 
 That fills `inputs/` (obs + MPCORB) and early products
-(`outputs/mois`, `outputs/states`) from
+(`outputs/mois`, `outputs/states`; `states` can also be rebuilt with
+`states.py`) from
 [mvroc-pipeline-data](https://drive.google.com/drive/folders/1gddbkDYiGWRI4pVhKPfR5AGp5dNpTrBW?usp=drive_link).
 The folder must be shared (*Anyone with the link / Viewer*). Existing local
 files are **skipped**.
@@ -63,6 +73,22 @@ make get_public_data    # re-fetch inputs/obs_sbn… + inputs/mpcorb…
 Delete the local files first if you need a forced refresh (`get_public_data`
 also skips paths that are already present).
 
+### SPICE kernels
+
+`states.py` needs three SPICE kernels that no `make` target downloads. Copy
+them from `code/kernels/` (gitignored under `inputs/` too):
+
+```bash
+mkdir -p inputs/kernels
+cp ../code/kernels/naif0012.tls ../code/kernels/gm_de440.tpc ../code/kernels/de440s.bsp inputs/kernels/
+```
+
+| File | Role |
+|---|---|
+| `inputs/kernels/naif0012.tls` | Leap seconds (UTC -> ET) |
+| `inputs/kernels/gm_de440.tpc` | GM of the Sun (DE440) |
+| `inputs/kernels/de440s.bsp` | Planetary ephemeris (Earth position) |
+
 ---
 
 ## 4. Stage order
@@ -77,9 +103,9 @@ inputs
 
 | Order | Stage | Driver today | Notes |
 |------:|-------|--------------|-------|
-| 1 | `crossmatches` | (not yet) | CSV may come from Drive / simulation |
-| 2 | `orbits` | (not yet) | same |
-| 3 | `states` | (not yet) | parquet via `make get_gdrive_data` |
+| 1 | `crossmatches` | `crossmatches.py` | needs obs + MPCORB (+ MPC API) |
+| 2 | `orbits` | `orbits.py` | needs `crossmatches.csv` + MPCORB |
+| 3 | `states` | `states.py` | needs `orbits.csv`, obs and `inputs/kernels/` (~4 min for all) |
 | 4 | `mois` | (not yet) | parquet via `make get_gdrive_data` |
 | 5 | `periodograms` | `periodograms.py` | needs photometry (mois+states+crossmatches) |
 | 6 | `foldings` | `foldings.py` | needs `periodograms.csv` |
@@ -87,14 +113,28 @@ inputs
 | 8 | `solutions` | `solutions.py` | needs `mocs.csv` |
 | 9 | shapefit | (future) | |
 
-Until early drivers exist, keep simulated / Drive-provided files under
-`outputs/crossmatches`, `orbits`, `states`, `mois`, and `mocs`.
+Until their drivers exist, keep simulated / Drive-provided files under
+`outputs/mois` and `outputs/mocs`.
 
 ---
 
 ## 5. Run the available drivers
 
 One positional argument: a provid or `all`.
+
+Build the early stages for the whole catalogue (in this order):
+
+```bash
+python crossmatches.py all
+python orbits.py all
+python states.py all
+```
+
+With a single provid these three print a per-object summary (MPC
+designation and Rubin aliases, orbital elements, geometry ranges and mean H).
+`crossmatches.csv` and `orbits.csv` are appended like the other CSVs;
+`states.parquet` is rewritten on every run and only objects whose orbit
+changed are recomputed (`flag_updated`, `orbit_hash`).
 
 Smoke-test one asteroid end-to-end (after data + upstream CSVs are in place):
 
@@ -138,8 +178,10 @@ foldings directly).
 - [ ] `cd pipeline`
 - [ ] `make install`
 - [ ] `make get_gdrive_data`
-- [ ] Upstream files present (`mois`, `states`, `crossmatches`, and for
-      solutions: `mocs`)
+- [ ] Kernels copied to `inputs/kernels/`
+- [ ] `python crossmatches.py all`, `python orbits.py all`,
+      `python states.py all`
+- [ ] Upstream files present (`mois`, and for solutions: `mocs`)
 - [ ] `python periodograms.py "1981 US22"`
 - [ ] `python foldings.py "1981 US22"`
 - [ ] `python solutions.py "1981 US22"`

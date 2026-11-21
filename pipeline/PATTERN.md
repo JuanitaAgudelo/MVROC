@@ -1,7 +1,8 @@
 # MVROC pipeline driver pattern
 
 How to write a stage driver under `pipeline/`. Global variables and helpers of the pipeline: `mvroc.py` . Reference implementations:
-`periodograms.py`, `foldings.py`, `solutions.py`.
+`crossmatches.py`, `orbits.py`, `states.py`, `periodograms.py`, `foldings.py`,
+`solutions.py`.
 
 ---
 
@@ -28,6 +29,10 @@ pipeline/                       # cwd for every driver
   inputs/                       # raw downloads (not committed to git)
     obs_sbn_X05_full.parquet    # Rubin MPC observations
     mpcorb_extended.dat.gz      # MPCORB extended (MPC)
+    kernels/                    # SPICE kernels (used by states)
+      naif0012.tls              #   leap seconds
+      gm_de440.tpc              #   GM of the Sun (DE440)
+      de440s.bsp                #   planetary ephemeris (Earth position)
   outputs/                      # stage outputs only
     crossmatches/
     orbits/
@@ -38,6 +43,9 @@ pipeline/                       # cwd for every driver
     mocs/
     solutions/
   mvroc.py
+  crossmatches.py
+  orbits.py
+  states.py
   periodograms.py
   foldings.py
   solutions.py
@@ -46,7 +54,8 @@ pipeline/                       # cwd for every driver
 
 | Path from `pipeline/` | Constant in `mvroc.py` | Role |
 |-----------------------|------------------------|------|
-| `inputs/` | `INPUTS` | Raw downloads (obs + MPCORB) |
+| `inputs/` | `INPUTS` | Raw downloads (obs + MPCORB + kernels) |
+| `inputs/kernels/` | `KERNELS` | SPICE kernels |
 | `outputs/` | `OUTPUTS` | Per-stage pipeline outputs |
 
 **Do not use** `pathlib.Path.resolve()`, `__file__`, or path helper wrappers
@@ -76,6 +85,19 @@ and **skips** paths that already exist locally:
 Share that Drive folder as *Anyone with the link / Viewer* so `gdown` can
 list and download it.
 
+**SPICE kernels** are not downloaded by any `make` target. Copy them from
+`code/kernels/` into `inputs/kernels/` (also gitignored):
+
+| Local path (under `pipeline/`) | Role |
+|--------------------------------|------|
+| `inputs/kernels/naif0012.tls` | Leap seconds (UTC -> ET) |
+| `inputs/kernels/gm_de440.tpc` | GM of the Sun (DE440) |
+| `inputs/kernels/de440s.bsp` | Planetary ephemeris (Earth position) |
+
+Without `make` (e.g. on Windows), run the same scripts from `pipeline/`:
+`python -m pip install -r .bin/requirements.txt`,
+`python .bin/get_gdrive_data.py`, `python .bin/get_public_data.py`.
+
 **Optional — update public inputs only** (not part of a normal first setup).
 Use when refreshing obs / MPCORB from their public URLs:
 
@@ -90,7 +112,8 @@ make get_public_data
 
 Also skips existing local files; delete them first to force a refresh.
 
-Column schemas: Appendix A.1–A.2 (inputs), A.5–A.6 (states / mois).
+Column schemas: Appendix A.1–A.2b (inputs), A.3–A.6 (crossmatches / orbits /
+states / mois).
 
 ---
 
@@ -127,9 +150,9 @@ file named `photometry.*`.
 | Order | Stage | Upstream (exact paths) | Writes |
 |------:|-------|------------------------|--------|
 | 0 | seed | external downloads (see **Getting the data** above) | `inputs/obs_sbn_X05_full.parquet`, `inputs/mpcorb_extended.dat.gz` |
-| 1 | `crossmatches` | `inputs/obs_sbn_X05_full.parquet`, `inputs/mpcorb_extended.dat.gz` | `outputs/crossmatches/crossmatches.csv` |
-| 2 | `orbits` | `outputs/crossmatches/crossmatches.csv`, `inputs/mpcorb_extended.dat.gz` | `outputs/orbits/orbits.csv` |
-| 3 | `states` | `outputs/orbits/orbits.csv`, `inputs/obs_sbn_X05_full.parquet` | `outputs/states/states.parquet` |
+| 1 | `crossmatches` | `inputs/obs_sbn_X05_full.parquet`, `inputs/mpcorb_extended.dat.gz`, MPC Identifier API | `outputs/crossmatches/crossmatches.csv`, `mpc_query_identifier.json`, `crossmatches.log` |
+| 2 | `orbits` | `outputs/crossmatches/crossmatches.csv`, `inputs/mpcorb_extended.dat.gz` | `outputs/orbits/orbits.csv`, `orbits.log` |
+| 3 | `states` | `outputs/orbits/orbits.csv`, `inputs/obs_sbn_X05_full.parquet`, `inputs/kernels/` | `outputs/states/states.parquet`, `states.log` |
 | 4 | `mois` | `outputs/states/states.parquet` (+ MOI filter on obs) | `outputs/mois/mois.parquet` |
 | 5 | `periodograms` | photometry = mois + states + crossmatches | `outputs/periodograms/periodograms.csv`, `*_periodogram.webp`, `periodograms.log` |
 | 6 | `foldings` | `outputs/periodograms/periodograms.csv` + photometry | `outputs/foldings/foldings.csv`, `*_folding.webp`, `foldings.log` |
@@ -137,15 +160,16 @@ file named `photometry.*`.
 | 8 | `solutions` | `outputs/mocs/mocs.csv` + photometry | `outputs/solutions/solutions.csv`, `*_solution.webp`, `solutions.log` |
 | 9 | shapefit | `outputs/solutions/solutions.csv` | (future) |
 
-Until early-stage drivers exist, their outputs may be **simulated** under
-`outputs/<stage>/` (see current `crossmatches`, `orbits`, `states`, `mois`,
-`mocs`). Column schemas still apply (Appendix A).
+`crossmatches`, `orbits` and `states` have drivers. Until the remaining
+early-stage drivers exist, their outputs may be **simulated** or come from
+Drive under `outputs/<stage>/` (currently `mois` and `mocs`). Column schemas
+still apply (Appendix A).
 
 ### Rules
 
 - Read earlier stage results from the **exact** upstream paths above.
 - Read raw downloads from `inputs/` when needed
-  (`mv.OBSERVATIONS_PARQUET`, and later MPCORB for orbits / crossmatches).
+  (`mv.OBSERVATIONS_PARQUET`, `mv.MPCORB_DAT`, kernels under `mv.KERNELS`).
 - Do **not** reimplement an upstream stage inside a later driver.
 - If an upstream file is missing, exit with a clear message.
 - Document Inputs / Outputs (including upstream paths) in the driver docstring.
@@ -157,6 +181,27 @@ Until early-stage drivers exist, their outputs may be **simulated** under
 inputs → crossmatches → orbits → states → mois
   → periodograms → foldings → mocs → solutions → shapefit
 ```
+
+**`crossmatches.py`** reads `inputs/obs_sbn_X05_full.parquet` and
+`inputs/mpcorb_extended.dat.gz` (plus the MPC Designation Identifier API for
+objects not in MPCORB) and writes:
+
+- `outputs/crossmatches/crossmatches.csv` (one row per matched `provid_vro`)
+- `outputs/crossmatches/mpc_query_identifier.json` (cache of API answers)
+- `outputs/crossmatches/crossmatches.log`
+
+**`orbits.py`** reads `outputs/crossmatches/crossmatches.csv` and
+`inputs/mpcorb_extended.dat.gz` and writes:
+
+- `outputs/orbits/orbits.csv` (one row per `provid_vro`)
+- `outputs/orbits/orbits.log`
+
+**`states.py`** reads `outputs/orbits/orbits.csv`,
+`inputs/obs_sbn_X05_full.parquet` and `inputs/kernels/` and writes:
+
+- `outputs/states/states.parquet` (one row per observation id; rewritten
+  every run, see section 9)
+- `outputs/states/states.log`
 
 **`periodograms.py`** reads photometry via `mv.load_moi_photometry()` and writes:
 
@@ -195,6 +240,9 @@ and writes:
 
 ```bash
 cd pipeline
+python crossmatches.py all
+python orbits.py all
+python states.py all
 python periodograms.py "1981 US22"
 python foldings.py all
 python solutions.py "1981 US22"
@@ -230,8 +278,8 @@ INPUTS = "inputs"
 OUTPUTS = "outputs"
 
 OBSERVATIONS_PARQUET = "inputs/obs_sbn_X05_full.parquet"
-# MPCORB (when orbits / crossmatches drivers need it):
-# inputs/mpcorb_extended.dat.gz
+MPCORB_DAT = "inputs/mpcorb_extended.dat.gz"
+KERNELS = "inputs/kernels"  # SPICE kernels
 
 CROSSMATCHES_CSV = "outputs/crossmatches/crossmatches.csv"
 ORBITS_CSV = "outputs/orbits/orbits.csv"
@@ -260,6 +308,8 @@ df = mv.load_moi_photometry()
 | One-object science | `mvroc_<algo>_asteroid(...)` | `mvroc_periodogram_asteroid(...)` |
 | Figure | `mvroc_<algo>_plot(...)` | `mvroc_folding_plot(...)`, `mvroc_solution_plot(...)` |
 | Skip helper | `mv.already_in_outputs(provid, RESULTS_CSV)` | shared in `mvroc.py` |
+| Skip set (many objects) | `mv.provids_in_outputs(RESULTS_CSV, column)` | reads the CSV once |
+| Single-object printout | `print_<algo>(...)` | `print_crossmatch`, `print_orbit`, `print_state` |
 | Arrays | plural `s` suffix | `ts`, `ys`, `dys` |
 | Constants | `UPPER_CASE` | `NB`, `N_FREQ`, `MIN_MAG_ERROR` |
 
@@ -284,7 +334,8 @@ Figure stems:
 - path constants (`INPUTS`, `OUTPUTS`, stage CSV/parquet paths)
 - `load_moi_photometry`, `prepare_asteroid`, `observation_counts`, …
 - `LogOutput`, `save_figure`, `slug`
-- common helpers: `cadence_min_period`, `merge_frequencies`, `already_in_outputs`
+- common helpers: `cadence_min_period`, `merge_frequencies`, `already_in_outputs`,
+  `provids_in_outputs`
 - shared constants: `MIN_MAG_ERROR`, `DPI`, …
 
 **Keep in the driver:**
@@ -406,6 +457,9 @@ if target.lower() != "all":
 - No force / fig-dir / dead flags.
 - If a parameter is almost always the same value, hard-code a constant.
 - `qplot=True` is fine when it separates science from plotting.
+- With a single provid, catalogue-wide stages (`crossmatches`, `orbits`,
+  `states`) print a per-object summary (`print_<algo>`) instead of the
+  catalogue summary printed with `all`.
 
 ---
 
@@ -436,6 +490,23 @@ pd.DataFrame([row], columns=RESULTS_COLUMNS).to_csv(
 
 Do not write incidental `*_observations.csv` files unless the stage product
 truly needs them.
+
+Stages keyed by `provid_vro` (`crossmatches`, `orbits`) cannot use
+`mv.already_in_outputs` (it reads a `provid` column); they read the done set
+once with `mv.provids_in_outputs(RESULTS_CSV, "provid_vro")`.
+
+**Parquet exception (`states`).** A parquet file cannot be appended.
+`states.py` rewrites `states.parquet` on every run: the `orbits.csv` row of
+each object (`provid_mpc`, `permid`, epoch and MPCORB elements) is hashed
+(`orbit_hash`); objects with an unchanged hash keep their rows
+(`flag_updated = 0`) and new or changed objects are recomputed
+(`flag_updated = 1`). The file is written to `states.parquet.tmp` and then
+renamed.
+
+**Schema guard.** Never append to (or merge with) a file written with other
+columns: CSV stages call `mv.check_results_header(RESULTS_CSV,
+RESULTS_COLUMNS)` at start; `states.py` checks the parquet schema the same
+way. Both stop with "Delete it and run again".
 
 ---
 
@@ -584,7 +655,8 @@ def mvroc_solutions():
 - [ ] Writes only `outputs/<stage>/`
 - [ ] Entry point `mvroc_<stage>()`; stage helpers in the same file
 - [ ] CLI: `provid | all`
-- [ ] CSV append + `mv.already_in_outputs`
+- [ ] CSV append + `mv.already_in_outputs` (or `mv.provids_in_outputs`;
+      parquet stages: hash-based rewrite as in `states.py`)
 - [ ] Log via `mv.LogOutput`
 - [ ] Full Parameters / Returns / Examples docstrings
 - [ ] Important steps marked with `# -->`
@@ -596,8 +668,9 @@ def mvroc_solutions():
 
 ## Appendix A. Files and columns
 
-Paths relative to `pipeline/`. Schemas match the current simulated or real
-stage products. Color columns use LSST letters `u,g,r,i,z,y` (not `Lu`…).
+Paths relative to `pipeline/`. Schemas match the current driver outputs
+(`crossmatches`, `orbits`, `states`) or the simulated / Drive products (the
+rest). Color columns use LSST letters `u,g,r,i,z,y` (not `Lu`…).
 
 ### A.0 Color-column set (shared)
 
@@ -638,50 +711,77 @@ Download: **Getting the data** (section 2) — `make get_gdrive_data`
 ### A.2 `inputs/mpcorb_extended.dat.gz`
 
 MPCORB extended orbital-element file from the Minor Planet Center (gzip text).
-Used by `crossmatches` / `orbits` (not by photometric stages). Not a CSV;
+Used by `crossmatches` (designation; other designations from column 217 in
+fixed 11-character fields) and `orbits` (epoch, a, e, incl, node, peri, M);
+not by photometric stages. Not a CSV;
 parse with the MPCORB format. Download: **Getting the data** (section 2) —
 `make get_gdrive_data` (optional: `make get_public_data`).
 
 ---
 
+### A.2b `inputs/kernels/`
+
+SPICE kernels used by `states` (copied from `code/kernels/`, gitignored):
+`naif0012.tls` (leap seconds), `gm_de440.tpc` (GM of the Sun),
+`de440s.bsp` (Earth position, ecliptic J2000).
+
+---
+
 ### A.3 `outputs/crossmatches/crossmatches.csv`
 
-VRO ↔ MPC designation map. One row per matched object.
+VRO ↔ MPC designation map. One row per matched `provid_vro` (objects without
+an MPC designation are not written and are retried on the next run). Search
+order: `permid` in MPCORB, `provid` in MPCORB, `provid` among the MPCORB
+other designations, MPC Designation Identifier API.
 
 | Column | Meaning |
 |--------|---------|
 | `provid_vro` | VRO / provisional name used in observations |
-| `provid_mpc` | MPC designation string |
-| `permid` | Permanent number (integer when numbered) |
-| `match_kind` | How the match was made (e.g. `numbered`) |
+| `provid_mpc` | MPC designation string (MPCORB format, e.g. `(1) Ceres`) |
+| `permid` | MPC number (integer when numbered) |
+| `match_kind` | Kind of MPC designation: `numbered`, `provisional` or `comet` |
 | `n_vro_for_mpc` | How many VRO names map to this MPC object |
+| `match_by` | Where the match came from: `permid`, `provid`, `other_desig` or `mpc_api` |
+
+Also written under `outputs/crossmatches/`:
+
+- `mpc_query_identifier.json` — cache of the MPC API answers
+- `crossmatches.log` — mirrored stdout
 
 ---
 
 ### A.4 `outputs/orbits/orbits.csv`
 
-Orbital elements for matched objects. One row per object.
+MPCORB orbital elements of each cross-matched object. One row per
+`provid_vro` (Rubin aliases of the same MPC object repeat its elements).
+Objects with no orbit in MPCORB (mostly comets) get a row with empty epoch and
+elements.
 
 | Column | Meaning |
 |--------|---------|
 | `provid_vro` | VRO designation |
 | `provid_mpc` | MPC designation |
 | `permid` | Permanent number |
-| `epoch_tdb` | Element epoch (TDB string) |
+| `epoch_tdb` | Element epoch, `YYYY-MM-DD 00:00:00` TDB (MPCORB epochs are 0h TT; TT - TDB < 2 ms) |
 | `a` | Semi-major axis (au) |
 | `e` | Eccentricity |
-| `q` | Perihelion distance (au) |
+| `q` | Perihelion distance a (1 - e) (au) |
 | `incl` | Inclination (deg) |
 | `node` | Longitude of ascending node (deg) |
 | `peri` | Argument of perihelion (deg) |
-| `M` | Mean anomaly (deg) |
+| `M` | Mean anomaly at the epoch (deg) |
+
+Also written: `outputs/orbits/orbits.log` — mirrored stdout.
 
 ---
 
 ### A.5 `outputs/states/states.parquet`
 
 Per-observation geometric state and absolute magnitude. One row per
-observation id.
+observation id whose `provid` is in `orbits.csv` (objects without elements get
+empty geometry and H). Elements -> heliocentric state at the epoch
+(`spiceypy.conics`) -> two-body propagation to the observation time
+(`spiceypy.prop2b`) -> light-time corrected geometry, Earth from `de440s`.
 
 | Column | Meaning |
 |--------|---------|
@@ -689,17 +789,20 @@ observation id.
 | `provid_vro` | VRO designation |
 | `provid_mpc` | MPC designation |
 | `permid` | Permanent number (nullable) |
-| `obstime` | Observation epoch |
-| `obs_et` | Ephemeris time (s) |
-| `deltat` | Light-time correction (s) |
-| `r` | Heliocentric distance (au) |
-| `delta` | Topocentric distance (au) |
+| `obstime` | Observation epoch (UTC) |
+| `obs_et` | Observation time as ephemeris time (TDB s past J2000) |
+| `deltat` | Days from the element epoch to the observation (TDB) |
+| `r` | Heliocentric distance (au), light-time corrected |
+| `delta` | Geocentric distance (au), light-time corrected |
 | `alpha` | Phase angle (deg) |
-| `mag` | Apparent magnitude |
-| `H` | Absolute magnitude (reduced) |
-| `flag_updated` | State-update flag |
+| `mag` | Apparent magnitude (Rubin, any band) |
+| `H` | Absolute magnitude, HG system with G = 0.15 and V = `mag` |
+| `flag_updated` | `1` if computed in the run that last wrote the file, `0` if kept (orbit unchanged) |
+| `orbit_hash` | Hash of `provid_mpc`, `permid`, the epoch and the MPCORB elements (a, e, incl, node, peri, M) |
 
 `load_moi_photometry` takes `id`, `H`, `provid_mpc` from this file.
+
+Also written: `outputs/states/states.log` — mirrored stdout.
 
 ---
 

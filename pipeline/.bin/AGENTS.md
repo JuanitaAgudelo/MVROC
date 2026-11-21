@@ -5,7 +5,8 @@ diverge, prefer the code and then update this file:
 
 - `pipeline/PATTERN.md` — layout, stages, data download, column schemas
 - `pipeline/mvroc.py` — shared helpers
-- `pipeline/periodograms.py`, `foldings.py`, `solutions.py` — reference drivers
+- `pipeline/crossmatches.py`, `orbits.py`, `states.py`, `periodograms.py`,
+  `foldings.py`, `solutions.py` — reference drivers
 
 ---
 
@@ -72,6 +73,11 @@ make get_gdrive_data
 ```
 
 Optional (only when refreshing public obs / MPCORB): `make get_public_data`.
+Without `make`: `python -m pip install -r .bin/requirements.txt`,
+`python .bin/get_gdrive_data.py`, `python .bin/get_public_data.py`.
+
+SPICE kernels for `states.py` are not downloaded: copy `naif0012.tls`,
+`gm_de440.tpc` and `de440s.bsp` from `code/kernels/` to `inputs/kernels/`.
 
 Details: `PATTERN.md` (**Getting the data**) and `QUICKSTART.md`.
 
@@ -97,7 +103,8 @@ RESULTS_COLUMNS = [...]
 ```
 
 Shared path constants live in `mvroc.py` (`INPUTS`, `OUTPUTS`,
-`MOIS_PARQUET`, `STATES_PARQUET`, `CROSSMATCHES_CSV`, `MOCS_CSV`, …).
+`OBSERVATIONS_PARQUET`, `MPCORB_DAT`, `KERNELS`, `MOIS_PARQUET`,
+`STATES_PARQUET`, `CROSSMATCHES_CSV`, `ORBITS_CSV`, `MOCS_CSV`, …).
 
 ---
 
@@ -107,7 +114,10 @@ Shared path constants live in `mvroc.py` (`INPUTS`, `OUTPUTS`,
 - Entry point: `mvroc_<stage>()`
 - Per-asteroid science: `mvroc_<algo>_asteroid(...)`
 - Figure: `mvroc_<algo>_plot(...)`
-- Skip helper: `mv.already_in_outputs(provid, RESULTS_CSV)`
+- Skip helper: `mv.already_in_outputs(provid, RESULTS_CSV)`; for many objects
+  or a `provid_vro` key: `mv.provids_in_outputs(RESULTS_CSV, column)`
+- Single-object printout: `print_<algo>(...)` (`print_crossmatch`,
+  `print_orbit`, `print_state`)
 - Arrays: plural `s` suffix (`ts`, `ys`, `dys`)
 - Constants: `UPPER_CASE`
 - Prefer the literal `"H"` over a useless global `PROP = "H"`
@@ -129,7 +139,8 @@ Figure stems:
 - path constants
 - `load_moi_photometry`, `prepare_asteroid`, `observation_counts`, …
 - `LogOutput`, `save_figure`, `slug`
-- `cadence_min_period`, `merge_frequencies`, `already_in_outputs`
+- `cadence_min_period`, `merge_frequencies`, `already_in_outputs`,
+  `provids_in_outputs`
 - shared constants (`MIN_MAG_ERROR`, `DPI`, …)
 
 **Keep in the driver:** stage science, constants, plot, CSV / log / CLI.
@@ -150,6 +161,8 @@ python <stage>.py "<provid>" | python <stage>.py <provid_with_underscores> | pyt
 - No argparse; no force / fig-dir flags.
 - Hard-code near-constant parameters.
 - `qplot=True` is fine when it separates science from plotting.
+- With a single provid, catalogue-wide stages (`crossmatches`, `orbits`,
+  `states`) print a per-object summary instead of the catalogue summary.
 
 ---
 
@@ -158,8 +171,15 @@ python <stage>.py "<provid>" | python <stage>.py <provid_with_underscores> | pyt
 - Path: `outputs/<stage>/<stage>.csv`
 - Create with header if missing; **append** per asteroid / solution
 - Never rewrite or upsert; user deletes the CSV to start clean
-- Skip with `mv.already_in_outputs(provid, RESULTS_CSV)`
+- Skip with `mv.already_in_outputs(provid, RESULTS_CSV)` (or
+  `mv.provids_in_outputs` when the key is `provid_vro`)
 - Do not write incidental `*_observations.csv` files
+- Exception: `states.parquet` cannot be appended; `states.py` rewrites it
+  every run, keeping rows of objects whose `orbit_hash` (provid_mpc, permid,
+  epoch, elements) is unchanged (`flag_updated = 0`) and recomputing the rest
+  (`flag_updated = 1`)
+- Schema guard: call `mv.check_results_header(RESULTS_CSV, RESULTS_COLUMNS)`
+  at start so rows are never appended under an old header
 
 ---
 
@@ -217,7 +237,8 @@ python <stage>.py "1981 US22"
 - [ ] Writes only `outputs/<stage>/`
 - [ ] Entry point `mvroc_<stage>()`; stage helpers in the same file
 - [ ] CLI: `provid | all`
-- [ ] CSV append + `mv.already_in_outputs`
+- [ ] CSV append + `mv.already_in_outputs` (or `mv.provids_in_outputs`;
+      parquet stages: hash-based rewrite as in `states.py`)
 - [ ] Log via `mv.LogOutput`
 - [ ] Full Parameters / Returns / Examples docstrings
 - [ ] Important steps marked with `# -->`

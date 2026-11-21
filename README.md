@@ -44,9 +44,9 @@ The public table is [mvroc.csv](mvroc.csv): 1 092 solutions, 99 columns, 703 a
 
 | Path | Role |
 |---|---|
-| [`pipeline/`](pipeline/) | Stage drivers (`periodograms.py`, `foldings.py`, …), `inputs/`, and `outputs/` |
+| [`pipeline/`](pipeline/) | Stage drivers (`crossmatches.py`, `orbits.py`, `states.py`, `periodograms.py`, `foldings.py`, `solutions.py`), `inputs/`, and `outputs/` |
 | [`pipeline/QUICKSTART.md`](pipeline/QUICKSTART.md) | Fresh-clone setup and how to run the pipeline drivers |
-| [`pipeline/inputs/`](pipeline/inputs/) | Raw downloads (obs parquet, MPCORB, …) |
+| [`pipeline/inputs/`](pipeline/inputs/) | Raw downloads (obs parquet, MPCORB) and SPICE kernels (`inputs/kernels/`) |
 | [`products/`](products/) | Pipeline data products and the public catalogue join |
 | [`mvroc.csv`](mvroc.csv) | Symlink to [`products/mvroc.csv`](products/mvroc.csv) |
 
@@ -60,6 +60,9 @@ Raw downloads live under [`pipeline/inputs/`](pipeline/inputs/). Large files are
 |---|---|---|
 | `obs_sbn_X05_full.parquet` | Parquet | Original Rubin MPC observations (12 October 2026; 8 078 546 rows) |
 | `mpcorb_extended.dat.gz` | gzip text | MPCORB extended orbital elements (Minor Planet Center) |
+| `kernels/naif0012.tls` | SPICE text kernel | Leap seconds (UTC -> ephemeris time) |
+| `kernels/gm_de440.tpc` | SPICE text kernel | GM of the Sun (DE440) |
+| `kernels/de440s.bsp` | SPICE binary kernel | Planetary ephemeris (Earth position) |
 
 Download from `pipeline/` (preferred):
 
@@ -68,6 +71,12 @@ cd pipeline
 make install
 make get_gdrive_data
 ```
+
+Without `make` (e.g. Windows), run `python -m pip install -r .bin/requirements.txt`
+and `python .bin/get_gdrive_data.py` from `pipeline/`.
+
+The SPICE kernels (used by `states.py`) are not downloaded by any target; copy
+them from [`code/kernels/`](code/kernels/) into `pipeline/inputs/kernels/`.
 
 Details: [`pipeline/QUICKSTART.md`](pipeline/QUICKSTART.md) and
 [`pipeline/PATTERN.md`](pipeline/PATTERN.md) (section **Getting the data**).
